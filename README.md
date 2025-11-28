@@ -1,1 +1,3 @@
 # magazyn-app
+
+Aplikacja magazynu
