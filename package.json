@@ -1,0 +1,23 @@
+{
+  "name": "magazyn-app",
+  "version": "1.0.0",
+  "description": "Desktopowa aplikacja magazynowa przyjazna Vinted",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "package": "electron-builder -w"
+  },
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^29.4.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.magazyn.app",
+    "productName": "MagazynApp",
+    "win": {
+      "target": "nsis"
+    }
+  }
+}
