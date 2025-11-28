@@ -28,7 +28,33 @@ const datalists = {
   drop: document.getElementById('dropOptions'),
 };
 
-let products = generateSeedData();
+const STORAGE_KEY = 'magazyn-app-products';
+
+function loadProducts() {
+  const stored = localStorage.getItem(STORAGE_KEY);
+  if (stored) {
+    try {
+      const parsed = JSON.parse(stored);
+      if (Array.isArray(parsed)) return parsed;
+    } catch (error) {
+      console.error('Nie udało się odczytać zapisanych produktów', error);
+    }
+  }
+
+  const seed = generateSeedData();
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(seed));
+  return seed;
+}
+
+function saveProducts() {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(products));
+  } catch (error) {
+    console.error('Nie udało się zapisać produktów', error);
+  }
+}
+
+let products = loadProducts();
 let selectedProductId = products[0]?.id ?? null;
 let currentPage = 1;
 let selectedFilters = {
@@ -373,6 +399,7 @@ function renderGallery(product) {
     mainBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       product.mainImageId = image.id;
+      saveProducts();
       render();
     });
 
@@ -404,6 +431,7 @@ function renderGallery(product) {
       e.stopPropagation();
       product.images = product.images.filter((img) => img.id !== image.id);
       if (product.mainImageId === image.id) product.mainImageId = product.images[0]?.id ?? null;
+      saveProducts();
       render();
     });
 
@@ -432,6 +460,7 @@ function moveImage(product, index, direction) {
   if (target < 0 || target >= product.images.length) return;
   const [img] = product.images.splice(index, 1);
   product.images.splice(target, 0, img);
+  saveProducts();
   render();
 }
 
@@ -464,6 +493,7 @@ function handleFormSubmit(event) {
   product.b = Number(productForm.metricB.value) || 0;
   product.c = Number(productForm.metricC.value) || 0;
 
+  saveProducts();
   render();
 }
 
@@ -488,6 +518,7 @@ function handleNewProduct() {
   products = [newProduct, ...products];
   selectedProductId = newProduct.id;
   currentPage = 1;
+  saveProducts();
   render();
 }
 
@@ -496,6 +527,7 @@ function handleDeleteProduct() {
   products = products.filter((p) => p.id !== selectedProductId);
   selectedProductId = products[0]?.id ?? null;
   currentPage = 1;
+  saveProducts();
   render();
 }
 
@@ -518,6 +550,7 @@ function handleAddImages(files) {
       product.images.push(image);
       if (!product.mainImageId) product.mainImageId = image.id;
     });
+    saveProducts();
     render();
   });
 }
