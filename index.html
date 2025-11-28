@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Magazyn Vinted</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="filters">
+      <div class="filter text">
+        <label>Wyszukaj…</label>
+        <input id="searchInput" type="text" placeholder="Nazwa produktu" />
+      </div>
+      <div class="filter text">
+        <label>Kod produktu…</label>
+        <input id="codeInput" type="text" placeholder="Kod produktu" />
+      </div>
+      <div class="filter select">
+        <label>Sortuj</label>
+        <select id="sortSelect">
+          <option value="najnowsze">Najnowsze</option>
+          <option value="najstarsze">Najstarsze</option>
+          <option value="cena-rosnaco">Cena rosnąco</option>
+          <option value="cena-malejaco">Cena malejąco</option>
+          <option value="az">A-Z</option>
+          <option value="za">Z-A</option>
+        </select>
+      </div>
+      <div class="filter multi" data-filter="brand">
+        <label>Marka</label>
+        <button class="dropdown-toggle" type="button">Wybierz</button>
+        <div class="dropdown" id="brandDropdown"></div>
+      </div>
+      <div class="filter multi" data-filter="size">
+        <label>Rozmiar</label>
+        <button class="dropdown-toggle" type="button">Wybierz</button>
+        <div class="dropdown" id="sizeDropdown"></div>
+      </div>
+      <div class="filter multi" data-filter="condition">
+        <label>Stan</label>
+        <button class="dropdown-toggle" type="button">Wybierz</button>
+        <div class="dropdown" id="conditionDropdown"></div>
+      </div>
+      <div class="filter multi" data-filter="drop">
+        <label>Rzut</label>
+        <button class="dropdown-toggle" type="button">Wybierz</button>
+        <div class="dropdown" id="dropDropdown"></div>
+      </div>
+    </header>
+
+    <main class="content">
+      <section class="products">
+        <header class="section-header">
+          <h2>Lista produktów</h2>
+          <div class="page-size">
+            <label for="pageSize">Produkty na stronie</label>
+            <select id="pageSize">
+              <option value="6">6</option>
+              <option value="8">8</option>
+              <option value="10" selected>10</option>
+              <option value="12">12</option>
+            </select>
+          </div>
+        </header>
+        <div class="product-list" id="productList"></div>
+        <footer class="pagination">
+          <button id="prevPage" aria-label="Poprzednia strona">←</button>
+          <span id="pageInfo">Strona 1</span>
+          <button id="nextPage" aria-label="Następna strona">→</button>
+        </footer>
+      </section>
+
+      <section class="editor">
+        <header class="section-header">
+          <h2>Edycja produktu</h2>
+          <button class="new-product" id="newProduct">Nowy Produkt</button>
+        </header>
+
+        <div class="editor-grid">
+          <div class="gallery" id="gallery"></div>
+          <div class="main-image" id="mainImage">
+            <div class="placeholder">Wybierz zdjęcie główne</div>
+          </div>
+          <div class="image-actions">
+            <button id="addImage" class="primary">Dodaj zdjęcie</button>
+            <input id="fileInput" type="file" accept="image/*" multiple hidden />
+          </div>
+        </div>
+
+        <form class="product-form" id="productForm">
+          <div class="form-row">
+            <div class="input-group">
+              <label for="productName">Nazwa produktu</label>
+              <input id="productName" name="name" type="text" required />
+            </div>
+            <div class="input-group">
+              <label for="condition">Stan</label>
+              <input list="conditionOptions" id="condition" name="condition" required />
+              <datalist id="conditionOptions"></datalist>
+            </div>
+            <div class="input-group">
+              <label for="price">Cena (PLN)</label>
+              <input id="price" name="price" type="number" step="0.01" min="0" required />
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="input-group">
+              <label for="size">Rozmiar</label>
+              <input list="sizeOptions" id="size" name="size" required />
+              <datalist id="sizeOptions"></datalist>
+            </div>
+            <div class="input-group">
+              <label for="drop">Rzut</label>
+              <input list="dropOptions" id="drop" name="drop" />
+              <datalist id="dropOptions"></datalist>
+            </div>
+            <div class="input-group">
+              <label for="brand">Marka</label>
+              <input list="brandOptions" id="brand" name="brand" />
+              <datalist id="brandOptions"></datalist>
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="input-group">
+              <label for="code">Kod produktu</label>
+              <input id="code" name="code" type="text" />
+            </div>
+            <div class="input-group">
+              <label for="metricA">A</label>
+              <input id="metricA" name="a" type="number" step="1" min="0" />
+            </div>
+            <div class="input-group">
+              <label for="metricB">B</label>
+              <input id="metricB" name="b" type="number" step="1" min="0" />
+            </div>
+            <div class="input-group">
+              <label for="metricC">C</label>
+              <input id="metricC" name="c" type="number" step="1" min="0" />
+            </div>
+          </div>
+
+          <div class="form-actions">
+            <button type="submit" class="primary" id="saveProduct">Zapisz</button>
+            <button type="button" class="danger" id="deleteProduct">Usuń</button>
+          </div>
+        </form>
+      </section>
+    </main>
+  </div>
+
+  <script type="module" src="renderer.js"></script>
+</body>
+</html>
