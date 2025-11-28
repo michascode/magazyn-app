@@ -18,6 +18,13 @@ npm install
 npm run package
 ```
 
+> W katalogu `dist/` pojawi się instalator `MagazynApp Setup*.exe`. Po zainstalowaniu na Windows aplikację uruchomisz jak zwykły program (skrót w menu Start). Na czas developmentu nadal używaj `npm start`.
+
+## Gdzie zapisują się dane
+- Lista produktów zapisuje się lokalnie w `localStorage` przeglądarki wbudowanej w aplikację (klucz `magazyn-app-products`).
+- Dzięki temu dodane/edytowane pozycje są dostępne po ponownym uruchomieniu aplikacji, zarówno z `npm start`, jak i z wersji `.exe`.
+- Aby zacząć od stanu początkowego, wyczyść pamięć aplikacji (np. w DevTools → Application → Local Storage) albo usuń wpis dla tego klucza.
+
 > Uwaga: w środowiskach z ograniczeniami sieciowymi może być konieczna konfiguracja proxy dla pobierania zależności.
 > Jeśli `electron-builder` zgłasza komunikat „Package \"electron\" is only allowed in devDependencies”, upewnij się, że `electron` znajduje się w sekcji `devDependencies` w `package.json` (tak jak w repozytorium) i zainstaluj zależności ponownie.
 
