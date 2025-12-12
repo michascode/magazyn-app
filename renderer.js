@@ -88,6 +88,11 @@ function unlockAuthUi() {
 }
 
 function setAuthLoading(state, message = 'Przetwarzanie…', controller = null) {
+  if (!state) {
+    unlockAuthUi();
+    return;
+  }
+
   authLoading = state;
   authOverlay.classList.toggle('hidden', !state);
   authOverlayText.textContent = message;
@@ -104,28 +109,12 @@ function setAuthLoading(state, message = 'Przetwarzanie…', controller = null) 
     authLoadingReset = null;
   }
 
-  if (state) {
-    authActiveController = controller || null;
-    authLoadingReset = setTimeout(() => {
-      if (!authLoading) return;
-      if (authActiveController) {
-        authActiveController.abort();
-        authActiveController = null;
-      }
-      authLoading = false;
-      authOverlay.classList.add('hidden');
-      authOverlayText.textContent = 'Spróbuj ponownie';
-      authCancelBtn.classList.add('hidden');
-      formElements.forEach((el) => {
-        el.disabled = false;
-      });
-    }, REQUEST_TIMEOUT_MS + 2000);
-  } else {
-    authActiveController = null;
-    formElements.forEach((el) => {
-      el.disabled = false;
-    });
-  }
+  authActiveController = controller || null;
+  authLoadingReset = setTimeout(() => {
+    if (!authLoading) return;
+    unlockAuthUi();
+    authOverlayText.textContent = 'Spróbuj ponownie';
+  }, REQUEST_TIMEOUT_MS + 2000);
 }
 
 function startAuthAction(message) {
@@ -1023,11 +1012,7 @@ toggleFormBtn.addEventListener('click', (e) => {
 
 authCancelBtn.addEventListener('click', (e) => {
   e.preventDefault();
-  if (authActiveController) {
-    authActiveController.abort();
-    authActiveController = null;
-  }
-  setAuthLoading(false);
+  unlockAuthUi();
 });
 
 restoreAuth();
