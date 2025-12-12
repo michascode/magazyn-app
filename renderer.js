@@ -68,15 +68,17 @@ let authLoading = false;
 let authLoadingReset = null;
 let authActiveController = null;
 
-function unlockAuthUi() {
-  if (authActiveController) {
+function unlockAuthUi({ abortRequest = false } = {}) {
+  if (abortRequest && authActiveController) {
     authActiveController.abort();
-    authActiveController = null;
   }
+  authActiveController = null;
+
   if (authLoadingReset) {
     clearTimeout(authLoadingReset);
     authLoadingReset = null;
   }
+
   authLoading = false;
   authOverlay.classList.add('hidden');
   authOverlayText.textContent = '';
@@ -89,7 +91,7 @@ function unlockAuthUi() {
 
 function setAuthLoading(state, message = 'Przetwarzanie…', controller = null) {
   if (!state) {
-    unlockAuthUi();
+    unlockAuthUi({ abortRequest: false });
     return;
   }
 
@@ -112,7 +114,7 @@ function setAuthLoading(state, message = 'Przetwarzanie…', controller = null) 
   authActiveController = controller || null;
   authLoadingReset = setTimeout(() => {
     if (!authLoading) return;
-    unlockAuthUi();
+    unlockAuthUi({ abortRequest: true });
     authOverlayText.textContent = 'Spróbuj ponownie';
   }, REQUEST_TIMEOUT_MS + 2000);
 }
@@ -1012,7 +1014,7 @@ toggleFormBtn.addEventListener('click', (e) => {
 
 authCancelBtn.addEventListener('click', (e) => {
   e.preventDefault();
-  unlockAuthUi();
+  unlockAuthUi({ abortRequest: true });
 });
 
 restoreAuth();

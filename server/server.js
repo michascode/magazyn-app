@@ -121,9 +121,6 @@ app.post('/api/magazines', authMiddleware, (req, res) => {
     return res.status(400).json({ message: 'Wymagany nick i hasło magazynu' });
   }
   const db = req.db;
-  if (db.magazines.some((m) => m.name === name)) {
-    return res.status(409).json({ message: 'Magazyn o takiej nazwie już istnieje' });
-  }
   const magazine = { id: uuid(), name, password: hashPassword(password), ownerId: req.user.id };
   db.magazines.push(magazine);
   ensureMembership(db, req.user.id).push(magazine.id);
