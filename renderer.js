@@ -68,6 +68,25 @@ let authLoading = false;
 let authLoadingReset = null;
 let authActiveController = null;
 
+function unlockAuthUi() {
+  if (authActiveController) {
+    authActiveController.abort();
+    authActiveController = null;
+  }
+  if (authLoadingReset) {
+    clearTimeout(authLoadingReset);
+    authLoadingReset = null;
+  }
+  authLoading = false;
+  authOverlay.classList.add('hidden');
+  authOverlayText.textContent = '';
+  authCancelBtn.classList.add('hidden');
+  const formElements = authScreen.querySelectorAll('input, button');
+  formElements.forEach((el) => {
+    el.disabled = false;
+  });
+}
+
 function setAuthLoading(state, message = 'Przetwarzanie…', controller = null) {
   authLoading = state;
   authOverlay.classList.toggle('hidden', !state);
@@ -867,6 +886,7 @@ async function handleJoinMagazine(event) {
 }
 
 function toggleAuthForm() {
+  unlockAuthUi();
   const isLoginVisible = !loginForm.classList.contains('hidden');
   loginForm.classList.toggle('hidden', isLoginVisible);
   registerForm.classList.toggle('hidden', !isLoginVisible);
@@ -891,6 +911,8 @@ async function handleSwitchMagazine() {
 }
 
 function render() {
+  const ready = Boolean(auth.token && auth.magazine);
+  if (!ready) unlockAuthUi();
   updateShellVisibility();
   if (!auth.token) {
     accountStep.classList.remove('hidden');
