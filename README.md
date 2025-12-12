@@ -32,6 +32,19 @@ npm run api   # startuje prosty serwer HTTP na porcie 4000 z persystencją w ser
 npm start
 ```
 
+## Konfiguracja bazy PostgreSQL (np. Supabase EU/Frankfurt)
+1. Utwórz projekt w wybranym dostawcy (np. Supabase w regionie eu-central-1) i zanotuj adres połączenia `DATABASE_URL` do bazy PostgreSQL.
+2. Skopiuj plik `.env.example` do `.env` i uzupełnij zmienne:
+   - `DATABASE_URL` – pełny connection string do bazy,
+   - `JWT_SECRET` – własny sekretny klucz do podpisywania tokenów,
+   - opcjonalnie `DATABASE_SSL=true` dla Supabase oraz `PORT` jeśli chcesz zmienić port API.
+3. Uruchom jednorazowo migracje SQL oraz import danych z pliku `server/data/db.json`:
+   ```bash
+   npm run migrate
+   ```
+   Skrypt tworzy tabele: `users` (login, password_hash, role), `warehouses`, `warehouse_memberships`, `products`, `product_images`, `sessions`, a następnie zasiewa dane z pliku JSON.
+4. Po migracji możesz podłączyć backend do bazy (wartość `DATABASE_URL` jest wczytywana przez serwer Express) albo nadal korzystać z pliku JSON w trybie offline.
+
 > Jeśli uruchamiasz serwer API w osobnym oknie PowerShell, wejdź najpierw do katalogu repozytorium. Przykład dla standardowej
 > lokalizacji na Pulpicie: `cd C:\Users\TwojeKonto\Desktop\magazyn-app`, a następnie `npm run api`.
 

@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
@@ -6,6 +7,16 @@ const crypto = require('crypto');
 const cors = require('cors');
 
 const PORT = process.env.PORT || 4000;
+const JWT_SECRET = process.env.JWT_SECRET || 'development-secret';
+const DATABASE_URL = process.env.DATABASE_URL;
+
+if (!DATABASE_URL) {
+  console.warn('DATABASE_URL nie ustawiony - API korzysta z pliku server/data/db.json.');
+}
+
+if (!process.env.JWT_SECRET) {
+  console.warn('JWT_SECRET nie ustawiony - używany jest klucz deweloperski.');
+}
 const DATA_PATH = path.join(__dirname, 'data', 'db.json');
 
 const app = express();
@@ -39,7 +50,21 @@ function hashPassword(password) {
 }
 
 function createToken(userId) {
-  return Buffer.from(`${userId}:${Date.now()}`).toString('base64');
+  const payload = `${userId}:${Date.now()}`;
+  const signature = crypto.createHmac('sha256', JWT_SECRET).update(payload).digest('hex');
+  return Buffer.from(`${payload}:${signature}`).toString('base64');
+}
+
+function decodeToken(token) {
+  const decoded = Buffer.from(token, 'base64').toString('utf-8');
+  const [userId, issuedAt, signature] = decoded.split(':');
+  if (!userId || !issuedAt || !signature) throw new Error('Niepełny token');
+  const expected = crypto
+    .createHmac('sha256', JWT_SECRET)
+    .update(`${userId}:${issuedAt}`)
+    .digest('hex');
+  if (expected !== signature) throw new Error('Błędny podpis tokenu');
+  return { userId, issuedAt: Number(issuedAt) };
 }
 
 function authMiddleware(req, res, next) {
@@ -47,8 +72,7 @@ function authMiddleware(req, res, next) {
   if (!header) return res.status(401).json({ message: 'Brak nagłówka autoryzacji' });
   const token = header.replace('Bearer ', '');
   try {
-    const decoded = Buffer.from(token, 'base64').toString('utf-8');
-    const [userId] = decoded.split(':');
+    const { userId } = decodeToken(token);
     const db = loadDb();
     const user = db.users.find((u) => u.id === userId);
     if (!user) return res.status(401).json({ message: 'Niepoprawny token' });
