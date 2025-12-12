@@ -128,6 +128,20 @@ function resetAuthStatus() {
   });
   enableAuthInputs();
   forceEnableAuthForms();
+  const defaultForm = loginForm.classList.contains('hidden') ? registerForm : loginForm;
+  forceUnlockAuthUi(defaultForm);
+}
+
+function forceUnlockAuthUi(formToFocus) {
+  authScreen.querySelectorAll('input, button, select, textarea').forEach((el) => {
+    el.disabled = false;
+    el.removeAttribute('aria-disabled');
+  });
+
+  if (formToFocus) {
+    const firstInput = formToFocus.querySelector('input:not([type="hidden"]):not([disabled])');
+    if (firstInput) firstInput.focus();
+  }
 }
 
 async function runAuthAction(form, statusEl, workingMessage, action) {
@@ -143,10 +157,7 @@ async function runAuthAction(form, statusEl, workingMessage, action) {
     return null;
   } finally {
     setFormBusy(form, statusEl, false, statusEl?.textContent || '');
-    enableAuthInputs();
-    forceEnableAuthForms();
-    const focusable = form.querySelector('input:not([type="hidden"]):not([disabled])');
-    focusable?.focus();
+    forceUnlockAuthUi(form);
   }
 }
 
