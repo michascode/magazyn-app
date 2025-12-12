@@ -589,6 +589,27 @@ button.danger:hover {
   gap: 12px;
 }
 
+.connection-settings {
+  grid-column: 1 / -1;
+}
+
+.api-url-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: flex-end;
+}
+
+.api-url-row .input-group {
+  flex: 1 1 240px;
+}
+
+.api-url-row button {
+  height: fit-content;
+  align-self: flex-start;
+  margin-top: 22px;
+}
+
 .auth-card h1 {
   margin: 0;
 }
