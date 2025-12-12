@@ -162,9 +162,15 @@ app.post('/api/magazines/:magazineId/products', authMiddleware, magazineAccessMi
 app.put('/api/magazines/:magazineId/products/:id', authMiddleware, magazineAccessMiddleware, (req, res) => {
   const items = req.db.products[req.magazineId] || [];
   const index = items.findIndex((p) => p.id === req.params.id);
-  if (index === -1) return res.status(404).json({ message: 'Produkt nie istnieje' });
-  const updated = { ...items[index], ...req.body, id: req.params.id };
-  items[index] = updated;
+  const updated = { ...req.body, id: req.params.id };
+
+  if (index === -1) {
+    updated.createdAt = updated.createdAt || Date.now();
+    items.unshift(updated);
+  } else {
+    items[index] = { ...items[index], ...updated };
+  }
+
   req.db.products[req.magazineId] = items;
   saveDb(req.db);
   res.json(updated);

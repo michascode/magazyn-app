@@ -80,10 +80,8 @@ function restoreAuth() {
 }
 
 function setFormBusy(form, statusEl, busy, message = '') {
-  const controls = form.querySelectorAll('input, button');
-  controls.forEach((el) => {
-    el.disabled = busy;
-  });
+  const submitBtn = form.querySelector('button[type="submit"]');
+  if (submitBtn) submitBtn.disabled = busy;
 
   if (statusEl) {
     statusEl.textContent = message;
@@ -114,6 +112,7 @@ async function runAuthAction(form, statusEl, workingMessage, action) {
     throw error;
   } finally {
     setFormBusy(form, statusEl, false, statusEl?.textContent || '');
+    resetAuthStatus();
   }
 }
 
