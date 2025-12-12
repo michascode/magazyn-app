@@ -7,6 +7,13 @@ require('dotenv').config();
 const connectionString = process.env.DATABASE_URL;
 const sslEnabled = (process.env.DATABASE_SSL || '').toLowerCase() === 'true' ||
   (connectionString || '').includes('supabase.co');
+const connectionHost = (() => {
+  try {
+    return new URL(connectionString).host;
+  } catch (error) {
+    return 'nieznany host';
+  }
+})();
 
 if (!connectionString) {
   console.error('Brak zmiennej środowiskowej DATABASE_URL. Uzupełnij .env i uruchom ponownie.');
@@ -14,8 +21,25 @@ if (!connectionString) {
 }
 
 const DATA_PATH = path.join(__dirname, '..', 'server', 'data', 'db.json');
-const rawDb = fs.readFileSync(DATA_PATH, 'utf-8');
-const jsonDb = JSON.parse(rawDb);
+const DEFAULT_DB = { users: [], magazines: [], memberships: {}, products: {} };
+
+function loadSeedData() {
+  if (!fs.existsSync(DATA_PATH)) {
+    console.warn(`Plik ${DATA_PATH} nie istnieje – tworzę pusty szablon.`);
+    fs.mkdirSync(path.dirname(DATA_PATH), { recursive: true });
+    fs.writeFileSync(DATA_PATH, JSON.stringify(DEFAULT_DB, null, 2));
+    return { ...DEFAULT_DB };
+  }
+
+  try {
+    return JSON.parse(fs.readFileSync(DATA_PATH, 'utf-8'));
+  } catch (error) {
+    console.warn('Nie udało się wczytać server/data/db.json, używam pustego zestawu danych.');
+    return { ...DEFAULT_DB };
+  }
+}
+
+const jsonDb = loadSeedData();
 
 const client = new Client({
   connectionString,
@@ -170,7 +194,7 @@ async function seedProducts() {
 }
 
 async function run() {
-  console.log('Łączenie z bazą danych...');
+  console.log(`Łączenie z bazą danych pod ${connectionHost} (SSL: ${sslEnabled ? 'włączone' : 'wyłączone'})...`);
   await client.connect();
   try {
     await client.query('BEGIN');
