@@ -64,6 +64,8 @@ let auth = {
   user: null,
   magazine: null,
 };
+let productFilters = { brand: [], size: [], condition: [], drop: [] };
+let totalProducts = 0;
 
 function unlockProductForm() {
   productForm.querySelectorAll('input, button, select, textarea').forEach((el) => {
@@ -143,6 +145,8 @@ function resetAppToInitialState() {
   auth = { token: null, user: null, magazine: null };
   products = [];
   selectedProductId = null;
+  productFilters = { brand: [], size: [], condition: [], drop: [] };
+  totalProducts = 0;
   persistAuth(auth);
   loginForm.reset();
   registerForm.reset();
@@ -219,9 +223,36 @@ async function fetchMagazines() {
 
 async function loadProducts() {
   if (!auth.token || !auth.magazine) return;
-  const data = await apiRequest(`/magazines/${auth.magazine.id}/products`);
-  products = data;
-  selectedProductId = products[0]?.id ?? null;
+  const params = new URLSearchParams();
+  params.set('page', currentPage);
+  params.set('pageSize', pageSizeSelect.value);
+
+  const searchText = searchInput.value.trim();
+  if (searchText) params.set('search', searchText);
+  const codeText = codeInput.value.trim();
+  if (codeText) params.set('code', codeText);
+  ['brand', 'size', 'condition', 'drop'].forEach((key) => {
+    const active = selectedFilters[key];
+    if (active.size > 0) params.set(key, Array.from(active).join(','));
+  });
+  if (sortSelect.value) params.set('sort', sortSelect.value);
+
+  const data = await apiRequest(`/magazines/${auth.magazine.id}/products?${params.toString()}`);
+  products = data.items || [];
+  totalProducts = data.total || 0;
+  productFilters = data.filters || productFilters;
+  if (!selectedProductId || !products.some((p) => p.id === selectedProductId)) {
+    selectedProductId = products[0]?.id ?? null;
+  }
+}
+
+async function reloadProductsAndRender() {
+  try {
+    await loadProducts();
+    render();
+  } catch (error) {
+    alert(error.message);
+  }
 }
 
 async function upsertProduct(product) {
@@ -255,12 +286,13 @@ async function removeProduct(id) {
   if (!auth.magazine) return;
   const basePath = `/magazines/${auth.magazine.id}/products`;
   await apiRequest(`${basePath}/${id}`, { method: 'DELETE' });
-  products = products.filter((p) => p.id !== id);
 }
 
 async function syncProductAndRender(product) {
   try {
-    await upsertProduct(product);
+    const saved = await upsertProduct(product);
+    selectedProductId = saved.id;
+    await loadProducts();
     render();
   } catch (error) {
     alert(error.message);
@@ -435,55 +467,15 @@ function generateSeedData() {
 }
 
 function getFilteredProducts() {
-  let list = [...products];
-
-  const searchText = searchInput.value.trim().toLowerCase();
-  if (searchText) {
-    list = list.filter((p) => p.name.toLowerCase().includes(searchText));
-  }
-
-  const codeText = codeInput.value.trim().toLowerCase();
-  if (codeText) {
-    list = list.filter((p) => p.code.toLowerCase().includes(codeText));
-  }
-
-  ['brand', 'size', 'condition', 'drop'].forEach((key) => {
-    const active = selectedFilters[key];
-    if (active.size > 0) {
-      list = list.filter((p) => active.has(String(p[key])));
-    }
-  });
-
-  switch (sortSelect.value) {
-    case 'cena-rosnaco':
-      list.sort((a, b) => a.price - b.price);
-      break;
-    case 'cena-malejaco':
-      list.sort((a, b) => b.price - a.price);
-      break;
-    case 'az':
-      list.sort((a, b) => a.name.localeCompare(b.name));
-      break;
-    case 'za':
-      list.sort((a, b) => b.name.localeCompare(a.name));
-      break;
-    case 'najstarsze':
-      list.sort((a, b) => a.createdAt - b.createdAt);
-      break;
-    case 'najnowsze':
-    default:
-      list.sort((a, b) => b.createdAt - a.createdAt);
-  }
-
-  return list;
+  return [...products];
 }
 
 function renderFilters() {
   const uniqueValues = {
-    brand: new Set(products.map((p) => p.brand).filter(Boolean)),
-    size: new Set(products.map((p) => p.size).filter(Boolean)),
-    condition: new Set(products.map((p) => p.condition).filter(Boolean)),
-    drop: new Set(products.map((p) => p.drop).filter(Boolean)),
+    brand: new Set((productFilters.brand || []).filter(Boolean)),
+    size: new Set((productFilters.size || []).filter(Boolean)),
+    condition: new Set((productFilters.condition || []).filter(Boolean)),
+    drop: new Set((productFilters.drop || []).filter(Boolean)),
   };
 
   Object.entries(dropdowns).forEach(([key, element]) => {
@@ -500,7 +492,7 @@ function renderFilters() {
         if (checkbox.checked) selectedFilters[key].add(value);
         else selectedFilters[key].delete(value);
         currentPage = 1;
-        render();
+        reloadProductsAndRender();
       });
       const span = document.createElement('span');
       span.textContent = value;
@@ -520,13 +512,10 @@ function renderFilters() {
 }
 
 function renderProductList() {
-  const filtered = getFilteredProducts();
+  const pageItems = getFilteredProducts();
   const pageSize = Number(pageSizeSelect.value);
-  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const totalPages = Math.max(1, Math.ceil(totalProducts / pageSize));
   currentPage = Math.min(currentPage, totalPages);
-
-  const start = (currentPage - 1) * pageSize;
-  const pageItems = filtered.slice(start, start + pageSize);
 
   productListEl.innerHTML = '';
   pageItems.forEach((product) => {
@@ -563,7 +552,7 @@ function renderProductList() {
     productListEl.appendChild(card);
   });
 
-  pageInfo.textContent = `Strona ${currentPage} z ${Math.max(1, Math.ceil(filtered.length / pageSize))}`;
+  pageInfo.textContent = `Strona ${currentPage} z ${Math.max(1, Math.ceil(totalProducts / pageSize))}`;
   prevPageBtn.disabled = currentPage === 1;
   nextPageBtn.disabled = currentPage >= totalPages;
 }
@@ -716,14 +705,15 @@ async function handleNewProduct() {
   const created = await upsertProduct(newProduct);
   selectedProductId = created.id;
   currentPage = 1;
+  await loadProducts();
   render();
 }
 
 async function handleDeleteProduct() {
   if (!selectedProductId) return;
   await removeProduct(selectedProductId);
-  selectedProductId = products[0]?.id ?? null;
   currentPage = 1;
+  await loadProducts();
   render();
 }
 
@@ -974,6 +964,9 @@ function handleLogout() {
   auth = { token: null, user: null, magazine: null };
   products = [];
   selectedProductId = null;
+  productFilters = { brand: [], size: [], condition: [], drop: [] };
+  totalProducts = 0;
+  currentPage = 1;
   persistAuth(auth);
   resetAuthStatus();
   render();
@@ -983,6 +976,9 @@ async function handleSwitchMagazine() {
   auth.magazine = null;
   products = [];
   selectedProductId = null;
+  productFilters = { brand: [], size: [], condition: [], drop: [] };
+  totalProducts = 0;
+  currentPage = 1;
   persistAuth(auth);
   resetAuthStatus();
   await fetchMagazines();
@@ -1017,7 +1013,7 @@ function render() {
   appShell.style.display = 'flex';
   unlockProductForm();
 
-  if (products.length === 0 && auth.magazine) {
+  if (products.length === 0 && totalProducts === 0 && auth.magazine) {
     const placeholder = document.createElement('p');
     placeholder.className = 'muted';
     placeholder.textContent = 'Brak produktów w magazynie.';
@@ -1039,32 +1035,32 @@ function render() {
 
 searchInput.addEventListener('input', () => {
   currentPage = 1;
-  renderProductList();
+  reloadProductsAndRender();
 });
 
 codeInput.addEventListener('input', () => {
   currentPage = 1;
-  renderProductList();
+  reloadProductsAndRender();
 });
 
 sortSelect.addEventListener('change', () => {
   currentPage = 1;
-  renderProductList();
+  reloadProductsAndRender();
 });
 
 pageSizeSelect.addEventListener('change', () => {
   currentPage = 1;
-  renderProductList();
+  reloadProductsAndRender();
 });
 
 prevPageBtn.addEventListener('click', () => {
   currentPage = Math.max(1, currentPage - 1);
-  renderProductList();
+  reloadProductsAndRender();
 });
 
 nextPageBtn.addEventListener('click', () => {
   currentPage += 1;
-  renderProductList();
+  reloadProductsAndRender();
 });
 
 Array.from(document.querySelectorAll('.filter.multi')).forEach((filterEl) => {
