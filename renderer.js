@@ -65,6 +65,13 @@ let auth = {
   magazine: null,
 };
 
+function unlockProductForm() {
+  productForm.querySelectorAll('input, button, select, textarea').forEach((el) => {
+    el.disabled = false;
+    el.removeAttribute('aria-disabled');
+  });
+}
+
 function persistAuth(data) {
   localStorage.setItem('magazyn-auth', JSON.stringify(data));
 }
@@ -89,6 +96,13 @@ function setFormBusy(form, statusEl, busy, message = '') {
   }
 }
 
+function enableAuthInputs() {
+  authScreen.querySelectorAll('input, button, select, textarea').forEach((el) => {
+    el.disabled = false;
+    el.removeAttribute('aria-disabled');
+  });
+}
+
 function resetAuthStatus() {
   accountStatus.textContent = '';
   magazineStatus.textContent = '';
@@ -98,6 +112,7 @@ function resetAuthStatus() {
       el.disabled = false;
     });
   });
+  enableAuthInputs();
 }
 
 async function runAuthAction(form, statusEl, workingMessage, action) {
@@ -110,7 +125,7 @@ async function runAuthAction(form, statusEl, workingMessage, action) {
     const message = error.message || 'Operacja nie powiodła się';
     if (statusEl) statusEl.textContent = message;
     alert(message);
-    throw error;
+    return null;
   } finally {
     setFormBusy(form, statusEl, false, statusEl?.textContent || '');
     resetAuthStatus();
@@ -663,17 +678,26 @@ function handleAddImages(files) {
   const product = products.find((p) => p.id === selectedProductId);
   if (!product) return;
 
-  const MAX_FILES = 8;
-  const MAX_IMAGE_SIZE = 2.5 * 1024 * 1024; // ~2.5MB
+  const MAX_FILES = 12;
+  const MAX_IMAGE_SIZE = 10 * 1024 * 1024; // ~10MB na pojedynczy plik
   const MAX_TOTAL = 12;
+  const MAX_SELECTED_SIZE = 20 * 1024 * 1024; // ~20MB naraz
 
-  const validFiles = Array.from(files).filter((file) => {
-    if (file.size > MAX_IMAGE_SIZE) {
-      alert(`Plik "${file.name}" jest za duży (limit 2.5MB).`);
-      return false;
-    }
-    return true;
-  });
+  const incoming = Array.from(files);
+
+  const tooBig = incoming.find((file) => file.size > MAX_IMAGE_SIZE);
+  if (tooBig) {
+    alert(`Plik "${tooBig.name}" jest za duży (limit 10MB na zdjęcie).`);
+    return;
+  }
+
+  const selectedSize = incoming.reduce((sum, file) => sum + file.size, 0);
+  if (selectedSize > MAX_SELECTED_SIZE) {
+    alert('Wybierz mniejszy zestaw zdjęć (limit ~20MB naraz).');
+    return;
+  }
+
+  const validFiles = incoming;
 
   const remainingSlots = Math.max(0, MAX_TOTAL - (product.images?.length || 0));
   const filesToRead = validFiles.slice(0, Math.min(remainingSlots, MAX_FILES));
@@ -937,6 +961,7 @@ function render() {
   activeWarehouseLabel.textContent = auth.magazine.name;
   authScreen.classList.add('hidden');
   appShell.style.display = 'flex';
+  unlockProductForm();
 
   if (products.length === 0 && auth.magazine) {
     const placeholder = document.createElement('p');

@@ -10,7 +10,7 @@ const DATA_PATH = path.join(__dirname, 'data', 'db.json');
 
 const app = express();
 app.use(cors());
-app.use(express.json({ limit: '25mb' }));
+app.use(express.json({ limit: '50mb' }));
 
 const DEFAULT_DB = { users: [], magazines: [], memberships: {}, products: {} };
 
