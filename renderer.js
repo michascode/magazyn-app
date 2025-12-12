@@ -31,6 +31,7 @@ const joinMagazineForm = document.getElementById('joinMagazineForm');
 const switchMagazineBtn = document.getElementById('switchMagazine');
 const authOverlay = document.getElementById('authOverlay');
 const authOverlayText = document.getElementById('authOverlayText');
+const authCancelBtn = document.getElementById('authCancel');
 
 const dropdowns = {
   brand: document.getElementById('brandDropdown'),
@@ -65,11 +66,15 @@ let auth = {
 };
 let authLoading = false;
 let authLoadingReset = null;
+let authActiveController = null;
 
-function setAuthLoading(state, message = 'Przetwarzanie…') {
+function setAuthLoading(state, message = 'Przetwarzanie…', controller = null) {
   authLoading = state;
   authOverlay.classList.toggle('hidden', !state);
   authOverlayText.textContent = message;
+  const showCancel = state && Boolean(controller);
+  authCancelBtn.classList.toggle('hidden', !showCancel);
+  authCancelBtn.disabled = !showCancel;
   const formElements = authScreen.querySelectorAll('input, button');
   formElements.forEach((el) => {
     el.disabled = state;
@@ -81,15 +86,30 @@ function setAuthLoading(state, message = 'Przetwarzanie…') {
   }
 
   if (state) {
+    authActiveController = controller || null;
     authLoadingReset = setTimeout(() => {
+      if (!authLoading) return;
+      if (authActiveController) {
+        authActiveController.abort();
+        authActiveController = null;
+      }
       authLoading = false;
       authOverlay.classList.add('hidden');
       authOverlayText.textContent = 'Spróbuj ponownie';
+      authCancelBtn.classList.add('hidden');
       formElements.forEach((el) => {
         el.disabled = false;
       });
     }, REQUEST_TIMEOUT_MS + 2000);
+  } else {
+    authActiveController = null;
   }
+}
+
+function startAuthAction(message) {
+  const controller = new AbortController();
+  setAuthLoading(true, message, controller);
+  return controller;
 }
 
 function persistAuth(data) {
@@ -109,17 +129,17 @@ function restoreAuth() {
 
 const REQUEST_TIMEOUT_MS = 8000;
 
-async function apiRequest(path, options = {}) {
+async function apiRequest(path, options = {}, { controller = null } = {}) {
   const headers = options.headers ? { ...options.headers } : {};
   if (auth.token) {
     headers.Authorization = `Bearer ${auth.token}`;
   }
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const ctrl = controller || new AbortController();
+  const timeout = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
 
   try {
-    const response = await fetch(`${API_URL}${path}`, { ...options, headers, signal: controller.signal });
+    const response = await fetch(`${API_URL}${path}`, { ...options, headers, signal: ctrl.signal });
     if (!response.ok) {
       const message = await response.json().catch(() => ({ message: 'Błąd serwera' }));
       throw new Error(message.message || 'Nie udało się wykonać żądania');
@@ -128,7 +148,7 @@ async function apiRequest(path, options = {}) {
     return response.json();
   } catch (error) {
     if (error.name === 'AbortError') {
-      throw new Error('Przekroczono czas oczekiwania na odpowiedź serwera');
+      throw new Error('Operacja przerwana (brak odpowiedzi lub anulowano).');
     }
     throw error;
   } finally {
@@ -741,12 +761,12 @@ async function handleLogin(event) {
   const username = loginForm.username.value;
   const password = loginForm.password.value;
   try {
-    setAuthLoading(true, 'Logowanie...');
+    const controller = startAuthAction('Logowanie...');
     const result = await apiRequest('/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password }),
-    });
+    }, { controller });
     auth = { token: result.token, user: result.user, magazine: null };
     persistAuth(auth);
     await fetchMagazines();
@@ -764,12 +784,12 @@ async function handleRegister(event) {
   const username = registerForm.username.value;
   const password = registerForm.password.value;
   try {
-    setAuthLoading(true, 'Zakładanie konta...');
+    const controller = startAuthAction('Zakładanie konta...');
     const result = await apiRequest('/auth/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password }),
-    });
+    }, { controller });
     auth = { token: result.token, user: result.user, magazine: null };
     persistAuth(auth);
     await fetchMagazines();
@@ -787,12 +807,12 @@ async function handleCreateMagazine(event) {
   const name = createMagazineForm.name.value;
   const password = createMagazineForm.password.value;
   try {
-    setAuthLoading(true, 'Tworzenie magazynu...');
+    const controller = startAuthAction('Tworzenie magazynu...');
     const mag = await apiRequest('/magazines', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name, password }),
-    });
+    }, { controller });
     magazines.push(mag);
     auth.magazine = mag;
     persistAuth(auth);
@@ -818,12 +838,12 @@ async function handleJoinMagazine(event) {
   const name = joinMagazineForm.name.value;
   const password = joinMagazineForm.password.value;
   try {
-    setAuthLoading(true, 'Łączenie z magazynem...');
+    const controller = startAuthAction('Łączenie z magazynem...');
     const mag = await apiRequest('/magazines/connect', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name, password }),
-    });
+    }, { controller });
     if (!magazines.some((m) => m.id === mag.id)) magazines.push(mag);
     auth.magazine = mag;
     persistAuth(auth);
@@ -974,6 +994,15 @@ switchMagazineBtn.addEventListener('click', handleSwitchMagazine);
 toggleFormBtn.addEventListener('click', (e) => {
   e.preventDefault();
   toggleAuthForm();
+});
+
+authCancelBtn.addEventListener('click', (e) => {
+  e.preventDefault();
+  if (authActiveController) {
+    authActiveController.abort();
+    authActiveController = null;
+  }
+  setAuthLoading(false);
 });
 
 restoreAuth();

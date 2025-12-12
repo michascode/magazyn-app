@@ -83,6 +83,11 @@ body {
   transition: all 0.2s ease;
 }
 
+.ghost.small {
+  padding: 8px 10px;
+  font-size: 13px;
+}
+
 .ghost:hover {
   border-color: var(--primary);
   color: var(--primary);
