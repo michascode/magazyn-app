@@ -1,4 +1,5 @@
 const productListEl = document.getElementById('productList');
+const appShell = document.querySelector('.app-shell');
 const searchInput = document.getElementById('searchInput');
 const codeInput = document.getElementById('codeInput');
 const sortSelect = document.getElementById('sortSelect');
@@ -13,6 +14,24 @@ const fileInput = document.getElementById('fileInput');
 const productForm = document.getElementById('productForm');
 const newProductBtn = document.getElementById('newProduct');
 const deleteProductBtn = document.getElementById('deleteProduct');
+const authScreen = document.getElementById('authScreen');
+const logoutBtn = document.getElementById('logoutBtn');
+const loginForm = document.getElementById('loginForm');
+const registerForm = document.getElementById('registerForm');
+const toggleFormBtn = document.getElementById('toggleForm');
+const activeWarehouseLabel = document.getElementById('activeWarehouse');
+const activeAccountLabel = document.getElementById('activeAccount');
+const magazineStep = document.getElementById('magazineStep');
+const accountStep = document.getElementById('accountStep');
+const accountName = document.getElementById('accountName');
+const logoutAccountBtn = document.getElementById('logoutAccount');
+const magazineListEl = document.getElementById('magazineList');
+const createMagazineForm = document.getElementById('createMagazineForm');
+const joinMagazineForm = document.getElementById('joinMagazineForm');
+const switchMagazineBtn = document.getElementById('switchMagazine');
+const authOverlay = document.getElementById('authOverlay');
+const authOverlayText = document.getElementById('authOverlayText');
+const authCancelBtn = document.getElementById('authCancel');
 
 const dropdowns = {
   brand: document.getElementById('brandDropdown'),
@@ -28,41 +47,178 @@ const datalists = {
   drop: document.getElementById('dropOptions'),
 };
 
-const STORAGE_KEY = 'magazyn-app-products';
+const API_URL = 'http://localhost:4000/api';
 
-function loadProducts() {
-  const stored = localStorage.getItem(STORAGE_KEY);
-  if (stored) {
-    try {
-      const parsed = JSON.parse(stored);
-      if (Array.isArray(parsed)) return parsed;
-    } catch (error) {
-      console.error('Nie udało się odczytać zapisanych produktów', error);
-    }
-  }
-
-  const seed = generateSeedData();
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(seed));
-  return seed;
-}
-
-function saveProducts() {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(products));
-  } catch (error) {
-    console.error('Nie udało się zapisać produktów', error);
-  }
-}
-
-let products = loadProducts();
-let selectedProductId = products[0]?.id ?? null;
+let products = [];
+let selectedProductId = null;
 let currentPage = 1;
+let magazines = [];
 let selectedFilters = {
   brand: new Set(),
   size: new Set(),
   condition: new Set(),
   drop: new Set(),
 };
+let auth = {
+  token: null,
+  user: null,
+  magazine: null,
+};
+let authLoading = false;
+let authLoadingReset = null;
+let authActiveController = null;
+
+function unlockAuthUi() {
+  if (authActiveController) {
+    authActiveController.abort();
+    authActiveController = null;
+  }
+  if (authLoadingReset) {
+    clearTimeout(authLoadingReset);
+    authLoadingReset = null;
+  }
+  authLoading = false;
+  authOverlay.classList.add('hidden');
+  authOverlayText.textContent = '';
+  authCancelBtn.classList.add('hidden');
+  const formElements = authScreen.querySelectorAll('input, button');
+  formElements.forEach((el) => {
+    el.disabled = false;
+  });
+}
+
+function setAuthLoading(state, message = 'Przetwarzanie…', controller = null) {
+  if (!state) {
+    unlockAuthUi();
+    return;
+  }
+
+  authLoading = state;
+  authOverlay.classList.toggle('hidden', !state);
+  authOverlayText.textContent = message;
+  const showCancel = state && Boolean(controller);
+  authCancelBtn.classList.toggle('hidden', !showCancel);
+  authCancelBtn.disabled = !showCancel;
+  const formElements = authScreen.querySelectorAll('input, button');
+  formElements.forEach((el) => {
+    el.disabled = state;
+  });
+
+  if (authLoadingReset) {
+    clearTimeout(authLoadingReset);
+    authLoadingReset = null;
+  }
+
+  authActiveController = controller || null;
+  authLoadingReset = setTimeout(() => {
+    if (!authLoading) return;
+    unlockAuthUi();
+    authOverlayText.textContent = 'Spróbuj ponownie';
+  }, REQUEST_TIMEOUT_MS + 2000);
+}
+
+function startAuthAction(message) {
+  const controller = new AbortController();
+  setAuthLoading(true, message, controller);
+  return controller;
+}
+
+function persistAuth(data) {
+  localStorage.setItem('magazyn-auth', JSON.stringify(data));
+}
+
+function restoreAuth() {
+  const stored = localStorage.getItem('magazyn-auth');
+  if (!stored) return;
+  try {
+    const parsed = JSON.parse(stored);
+    auth = { token: parsed.token || null, user: parsed.user || null, magazine: parsed.magazine || null };
+  } catch (error) {
+    console.error('Nie udało się odczytać danych logowania', error);
+  }
+}
+
+const REQUEST_TIMEOUT_MS = 8000;
+
+async function apiRequest(path, options = {}, { controller = null } = {}) {
+  const headers = options.headers ? { ...options.headers } : {};
+  if (auth.token) {
+    headers.Authorization = `Bearer ${auth.token}`;
+  }
+
+  const ctrl = controller || new AbortController();
+  const timeout = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(`${API_URL}${path}`, { ...options, headers, signal: ctrl.signal });
+    if (!response.ok) {
+      const message = await response.json().catch(() => ({ message: 'Błąd serwera' }));
+      throw new Error(message.message || 'Nie udało się wykonać żądania');
+    }
+    if (response.status === 204) return null;
+    return response.json();
+  } catch (error) {
+    if (error.name === 'AbortError') {
+      throw new Error('Operacja przerwana (brak odpowiedzi lub anulowano).');
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function fetchMagazines() {
+  if (!auth.token) return [];
+  const list = await apiRequest('/magazines');
+  magazines = list;
+  return list;
+}
+
+async function loadProducts() {
+  if (!auth.token || !auth.magazine) return;
+  const data = await apiRequest(`/magazines/${auth.magazine.id}/products`);
+  products = data;
+  selectedProductId = products[0]?.id ?? null;
+}
+
+async function upsertProduct(product) {
+  if (!auth.magazine) throw new Error('Brak wybranego magazynu');
+  const basePath = `/magazines/${auth.magazine.id}/products`;
+  if (product.id) {
+    const updated = await apiRequest(`${basePath}/${product.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(product),
+    });
+    const index = products.findIndex((p) => p.id === updated.id);
+    products[index] = updated;
+    return updated;
+  }
+
+  const created = await apiRequest(basePath, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(product),
+  });
+  products.unshift(created);
+  return created;
+}
+
+async function removeProduct(id) {
+  if (!auth.magazine) return;
+  const basePath = `/magazines/${auth.magazine.id}/products`;
+  await apiRequest(`${basePath}/${id}`, { method: 'DELETE' });
+  products = products.filter((p) => p.id !== id);
+}
+
+async function syncProductAndRender(product) {
+  try {
+    await upsertProduct(product);
+    render();
+  } catch (error) {
+    alert(error.message);
+  }
+}
 
 function generateSeedData() {
   const sampleImages = [
@@ -399,8 +555,7 @@ function renderGallery(product) {
     mainBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       product.mainImageId = image.id;
-      saveProducts();
-      render();
+      syncProductAndRender(product);
     });
 
     const upBtn = document.createElement('button');
@@ -431,8 +586,7 @@ function renderGallery(product) {
       e.stopPropagation();
       product.images = product.images.filter((img) => img.id !== image.id);
       if (product.mainImageId === image.id) product.mainImageId = product.images[0]?.id ?? null;
-      saveProducts();
-      render();
+      syncProductAndRender(product);
     });
 
     actions.append(mainBtn, upBtn, downBtn, removeBtn);
@@ -460,8 +614,7 @@ function moveImage(product, index, direction) {
   if (target < 0 || target >= product.images.length) return;
   const [img] = product.images.splice(index, 1);
   product.images.splice(target, 0, img);
-  saveProducts();
-  render();
+  syncProductAndRender(product);
 }
 
 function fillForm(product) {
@@ -477,7 +630,7 @@ function fillForm(product) {
   productForm.metricC.value = product.c ?? '';
 }
 
-function handleFormSubmit(event) {
+async function handleFormSubmit(event) {
   event.preventDefault();
   const product = products.find((p) => p.id === selectedProductId);
   if (!product) return;
@@ -493,13 +646,11 @@ function handleFormSubmit(event) {
   product.b = Number(productForm.metricB.value) || 0;
   product.c = Number(productForm.metricC.value) || 0;
 
-  saveProducts();
-  render();
+  await syncProductAndRender(product);
 }
 
-function handleNewProduct() {
+async function handleNewProduct() {
   const newProduct = {
-    id: crypto.randomUUID(),
     name: 'Nowy produkt',
     brand: '',
     size: '',
@@ -515,19 +666,18 @@ function handleNewProduct() {
     mainImageId: null,
   };
 
-  products = [newProduct, ...products];
-  selectedProductId = newProduct.id;
+  const created = await upsertProduct(newProduct);
+  products = [created, ...products];
+  selectedProductId = created.id;
   currentPage = 1;
-  saveProducts();
   render();
 }
 
-function handleDeleteProduct() {
+async function handleDeleteProduct() {
   if (!selectedProductId) return;
-  products = products.filter((p) => p.id !== selectedProductId);
+  await removeProduct(selectedProductId);
   selectedProductId = products[0]?.id ?? null;
   currentPage = 1;
-  saveProducts();
   render();
 }
 
@@ -550,40 +700,250 @@ function handleAddImages(files) {
       product.images.push(image);
       if (!product.mainImageId) product.mainImageId = image.id;
     });
-    saveProducts();
-    render();
+    syncProductAndRender(product);
   });
+}
+
+function renderDropdowns() {
+  Array.from(document.querySelectorAll('.filter.multi')).forEach((filterEl) => {
+    filterEl.classList.remove('open');
+  });
+}
+
+function toggleDropdown(element) {
+  const isOpen = element.classList.contains('open');
+  renderDropdowns();
+  if (!isOpen) element.classList.add('open');
+}
+
+function renderMagazines() {
+  magazineListEl.innerHTML = '';
+  if (magazines.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'muted';
+    empty.textContent = 'Brak magazynów. Utwórz nowy lub dołącz do istniejącego.';
+    magazineListEl.appendChild(empty);
+    return;
+  }
+
+  magazines.forEach((mag) => {
+    const item = document.createElement('div');
+    item.className = 'magazine-item';
+    const info = document.createElement('div');
+    const title = document.createElement('strong');
+    title.textContent = mag.name;
+    const meta = document.createElement('p');
+    meta.className = 'muted';
+    meta.textContent = mag.ownerId === auth.user?.id ? 'Twój magazyn' : 'Udostępniony';
+    info.append(title, meta);
+
+    const btn = document.createElement('button');
+    btn.className = 'primary';
+    btn.textContent = auth.magazine?.id === mag.id ? 'Aktywny' : 'Otwórz';
+    btn.disabled = auth.magazine?.id === mag.id;
+    btn.addEventListener('click', async () => {
+      auth.magazine = mag;
+      persistAuth(auth);
+      await loadProducts();
+      if (products.length === 0) {
+        const seed = generateSeedData();
+        for (const product of seed) {
+          await upsertProduct(product);
+        }
+        await loadProducts();
+      }
+      render();
+    });
+
+    item.append(info, btn);
+    magazineListEl.appendChild(item);
+  });
+}
+
+function updateShellVisibility() {
+  const ready = Boolean(auth.token && auth.magazine);
+  authScreen.classList.toggle('hidden', ready);
+  appShell.style.display = ready ? 'flex' : 'none';
+}
+
+async function handleLogin(event) {
+  event.preventDefault();
+  if (authLoading) return;
+  const username = loginForm.username.value;
+  const password = loginForm.password.value;
+  try {
+    const controller = startAuthAction('Logowanie...');
+    const result = await apiRequest('/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    }, { controller });
+    auth = { token: result.token, user: result.user, magazine: null };
+    persistAuth(auth);
+    await fetchMagazines();
+    render();
+  } catch (error) {
+    alert(error.message);
+  } finally {
+    setAuthLoading(false);
+  }
+}
+
+async function handleRegister(event) {
+  event.preventDefault();
+  if (authLoading) return;
+  const username = registerForm.username.value;
+  const password = registerForm.password.value;
+  try {
+    const controller = startAuthAction('Zakładanie konta...');
+    const result = await apiRequest('/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    }, { controller });
+    auth = { token: result.token, user: result.user, magazine: null };
+    persistAuth(auth);
+    await fetchMagazines();
+    render();
+  } catch (error) {
+    alert(error.message);
+  } finally {
+    setAuthLoading(false);
+  }
+}
+
+async function handleCreateMagazine(event) {
+  event.preventDefault();
+  if (authLoading) return;
+  const name = createMagazineForm.name.value;
+  const password = createMagazineForm.password.value;
+  try {
+    const controller = startAuthAction('Tworzenie magazynu...');
+    const mag = await apiRequest('/magazines', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, password }),
+    }, { controller });
+    magazines.push(mag);
+    auth.magazine = mag;
+    persistAuth(auth);
+    await loadProducts();
+    if (products.length === 0) {
+      const seed = generateSeedData();
+      for (const product of seed) {
+        await upsertProduct(product);
+      }
+      await loadProducts();
+    }
+    render();
+  } catch (error) {
+    alert(error.message);
+  } finally {
+    setAuthLoading(false);
+  }
+}
+
+async function handleJoinMagazine(event) {
+  event.preventDefault();
+  if (authLoading) return;
+  const name = joinMagazineForm.name.value;
+  const password = joinMagazineForm.password.value;
+  try {
+    const controller = startAuthAction('Łączenie z magazynem...');
+    const mag = await apiRequest('/magazines/connect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, password }),
+    }, { controller });
+    if (!magazines.some((m) => m.id === mag.id)) magazines.push(mag);
+    auth.magazine = mag;
+    persistAuth(auth);
+    await loadProducts();
+    if (products.length === 0) {
+      const seed = generateSeedData();
+      for (const product of seed) {
+        await upsertProduct(product);
+      }
+      await loadProducts();
+    }
+    render();
+  } catch (error) {
+    alert(error.message);
+  } finally {
+    setAuthLoading(false);
+  }
+}
+
+function toggleAuthForm() {
+  unlockAuthUi();
+  const isLoginVisible = !loginForm.classList.contains('hidden');
+  loginForm.classList.toggle('hidden', isLoginVisible);
+  registerForm.classList.toggle('hidden', !isLoginVisible);
+  toggleFormBtn.textContent = isLoginVisible ? 'Masz już konto? Zaloguj się' : 'Nie masz konta? Załóż je';
+}
+
+function handleLogout() {
+  auth = { token: null, user: null, magazine: null };
+  products = [];
+  selectedProductId = null;
+  persistAuth(auth);
+  render();
+}
+
+async function handleSwitchMagazine() {
+  auth.magazine = null;
+  products = [];
+  selectedProductId = null;
+  persistAuth(auth);
+  await fetchMagazines();
+  render();
 }
 
 function render() {
-  renderFilters();
-  renderProductList();
-  const product = products.find((p) => p.id === selectedProductId);
-  if (product) {
-    renderGallery(product);
-    fillForm(product);
+  const ready = Boolean(auth.token && auth.magazine);
+  if (!ready) unlockAuthUi();
+  updateShellVisibility();
+  if (!auth.token) {
+    accountStep.classList.remove('hidden');
+    magazineStep.classList.add('hidden');
+    return;
+  }
+
+  accountName.textContent = auth.user?.username || '-';
+  activeAccountLabel.textContent = auth.user ? `konto: ${auth.user.username}` : '';
+
+  if (!auth.magazine) {
+    accountStep.classList.add('hidden');
+    magazineStep.classList.remove('hidden');
+    renderMagazines();
+    return;
+  }
+
+  accountStep.classList.add('hidden');
+  magazineStep.classList.add('hidden');
+  activeWarehouseLabel.textContent = auth.magazine.name;
+  authScreen.classList.add('hidden');
+  appShell.style.display = 'flex';
+
+  if (products.length === 0 && auth.magazine) {
+    const placeholder = document.createElement('p');
+    placeholder.className = 'muted';
+    placeholder.textContent = 'Brak produktów w magazynie.';
+    productListEl.innerHTML = '';
+    productListEl.appendChild(placeholder);
   } else {
-    galleryEl.innerHTML = '';
-    mainImageEl.innerHTML = '<div class="placeholder">Brak wybranego produktu</div>';
-    productForm.reset();
+    renderFilters();
+    renderProductList();
+    const product = products.find((p) => p.id === selectedProductId) || products[0];
+    if (product) {
+      selectedProductId = product.id;
+      fillForm(product);
+      renderGallery(product);
+    } else {
+      galleryEl.innerHTML = '<p class="muted">Brak produktu do wyświetlenia.</p>';
+    }
   }
 }
-
-function toggleDropdown(target) {
-  document.querySelectorAll('.filter.multi').forEach((el) => {
-    if (el === target) return;
-    el.classList.remove('open');
-  });
-  target.classList.toggle('open');
-}
-
-function closeDropdowns(event) {
-  if (!event.target.closest('.filter.multi')) {
-    document.querySelectorAll('.filter.multi').forEach((el) => el.classList.remove('open'));
-  }
-}
-
-document.addEventListener('click', closeDropdowns);
 
 searchInput.addEventListener('input', () => {
   currentPage = 1;
@@ -623,6 +983,8 @@ Array.from(document.querySelectorAll('.filter.multi')).forEach((filterEl) => {
   });
 });
 
+document.addEventListener('click', () => renderDropdowns());
+
 addImageBtn.addEventListener('click', () => fileInput.click());
 fileInput.addEventListener('change', (e) => {
   if (e.target.files.length) {
@@ -635,4 +997,28 @@ productForm.addEventListener('submit', handleFormSubmit);
 newProductBtn.addEventListener('click', handleNewProduct);
 deleteProductBtn.addEventListener('click', handleDeleteProduct);
 
-render();
+loginForm.addEventListener('submit', handleLogin);
+registerForm.addEventListener('submit', handleRegister);
+createMagazineForm.addEventListener('submit', handleCreateMagazine);
+joinMagazineForm.addEventListener('submit', handleJoinMagazine);
+logoutBtn.addEventListener('click', handleLogout);
+logoutAccountBtn.addEventListener('click', handleLogout);
+switchMagazineBtn.addEventListener('click', handleSwitchMagazine);
+
+toggleFormBtn.addEventListener('click', (e) => {
+  e.preventDefault();
+  toggleAuthForm();
+});
+
+authCancelBtn.addEventListener('click', (e) => {
+  e.preventDefault();
+  unlockAuthUi();
+});
+
+restoreAuth();
+fetchMagazines()
+  .then(() => loadProducts())
+  .catch((error) => {
+    if (auth.token) alert(error.message);
+  })
+  .finally(() => render());
