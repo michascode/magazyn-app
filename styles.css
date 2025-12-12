@@ -663,6 +663,21 @@ button.danger:hover {
   gap: 10px;
 }
 
+.mag-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.ghost.danger {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.ghost.danger:hover {
+  background: rgba(244, 67, 54, 0.08);
+}
+
 .link {
   background: none;
   border: none;

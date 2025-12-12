@@ -41,9 +41,10 @@ npm run package
 > W katalogu `dist/` pojawi się instalator `MagazynApp Setup*.exe`. Po zainstalowaniu na Windows aplikację uruchomisz jak zwykły program (skrót w menu Start). Na czas developmentu nadal używaj `npm start`.
 
 ## Gdzie zapisują się dane i jak działa logowanie
-- Konta użytkowników (nick + hasło), magazyny (osobna nazwa + hasło) i produkty są zapisywane w pliku JSON `server/data/db.json` zarządzanym przez serwer Express.
-- API obsługuje ścieżki: `/api/auth/*` (logowanie/rejestracja konta), `/api/magazines` (lista, tworzenie), `/api/magazines/connect` (dołączanie na podstawie hasła), `/api/magazines/:id/products` (CRUD na produktach wybranego magazynu).
+- Konta użytkowników (nick + hasło), magazyny (osobna nazwa + hasło) i produkty są zapisywane w pliku JSON `server/data/db.json` zarządzanym przez serwer Express. Nicki kont i magazynów są unikalne w skali całego serwera (nie można utworzyć duplikatów).
+- API obsługuje ścieżki: `/api/auth/*` (logowanie/rejestracja konta), `/api/magazines` (lista, tworzenie, usuwanie), `/api/magazines/connect` (dołączanie na podstawie hasła), `/api/magazines/:id/products` (CRUD na produktach wybranego magazynu).
 - Po utworzeniu nowego magazynu aplikacja zasiewa na serwerze startowy zestaw produktów, dzięki czemu od razu widać stan magazynu także na innych urządzeniach.
+- Właściciel magazynu może go trwale usunąć, a uczestnik może jedynie usunąć magazyn ze swojej listy (bez kasowania danych na serwerze).
 - Jeśli chcesz wyczyścić dane, usuń lub wyzeruj plik `server/data/db.json` przy wyłączonym serwerze API.
 
 > Uwaga: w środowiskach z ograniczeniami sieciowymi może być konieczna konfiguracja proxy dla pobierania zależności.

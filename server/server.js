@@ -10,7 +10,7 @@ const DATA_PATH = path.join(__dirname, 'data', 'db.json');
 
 const app = express();
 app.use(cors());
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '25mb' }));
 
 const DEFAULT_DB = { users: [], magazines: [], memberships: {}, products: {} };
 
@@ -81,7 +81,7 @@ app.post('/api/auth/register', (req, res) => {
     return res.status(400).json({ message: 'Wymagany nick i hasło do konta' });
   }
   const db = loadDb();
-  if (db.users.some((u) => u.username === username)) {
+  if (db.users.some((u) => u.username.toLowerCase() === username.toLowerCase())) {
     return res.status(409).json({ message: 'Użytkownik o takim nicku już istnieje' });
   }
   const user = { id: uuid(), username, password: hashPassword(password) };
@@ -97,7 +97,7 @@ app.post('/api/auth/login', (req, res) => {
     return res.status(400).json({ message: 'Wymagany nick i hasło do konta' });
   }
   const db = loadDb();
-  const user = db.users.find((u) => u.username === username);
+  const user = db.users.find((u) => u.username.toLowerCase() === username.toLowerCase());
   if (!user || user.password !== hashPassword(password)) {
     return res.status(401).json({ message: 'Niepoprawny nick lub hasło' });
   }
@@ -121,6 +121,10 @@ app.post('/api/magazines', authMiddleware, (req, res) => {
     return res.status(400).json({ message: 'Wymagany nick i hasło magazynu' });
   }
   const db = req.db;
+  const exists = db.magazines.some((m) => m.name.toLowerCase() === name.toLowerCase());
+  if (exists) {
+    return res.status(409).json({ message: 'Magazyn o takim nicku już istnieje' });
+  }
   const magazine = { id: uuid(), name, password: hashPassword(password), ownerId: req.user.id };
   db.magazines.push(magazine);
   ensureMembership(db, req.user.id).push(magazine.id);
@@ -135,7 +139,7 @@ app.post('/api/magazines/connect', authMiddleware, (req, res) => {
     return res.status(400).json({ message: 'Wymagany nick i hasło magazynu' });
   }
   const db = req.db;
-  const magazine = db.magazines.find((m) => m.name === name);
+  const magazine = db.magazines.find((m) => m.name.toLowerCase() === name.toLowerCase());
   if (!magazine || magazine.password !== hashPassword(password)) {
     return res.status(401).json({ message: 'Niepoprawna nazwa magazynu lub hasło' });
   }
@@ -143,6 +147,27 @@ app.post('/api/magazines/connect', authMiddleware, (req, res) => {
   if (!memberships.includes(magazine.id)) memberships.push(magazine.id);
   saveDb(db);
   res.json({ id: magazine.id, name: magazine.name, ownerId: magazine.ownerId });
+});
+
+app.delete('/api/magazines/:magazineId', authMiddleware, magazineAccessMiddleware, (req, res) => {
+  const { db, user, magazineId } = req;
+  const magazine = db.magazines.find((m) => m.id === magazineId);
+  if (!magazine) return res.status(404).json({ message: 'Magazyn nie istnieje' });
+
+  if (magazine.ownerId === user.id) {
+    db.magazines = db.magazines.filter((m) => m.id !== magazineId);
+    delete db.products[magazineId];
+    Object.keys(db.memberships).forEach((userId) => {
+      db.memberships[userId] = (db.memberships[userId] || []).filter((id) => id !== magazineId);
+      if (db.memberships[userId].length === 0) delete db.memberships[userId];
+    });
+    saveDb(db);
+    return res.json({ removed: true, scope: 'deleted' });
+  }
+
+  db.memberships[user.id] = (db.memberships[user.id] || []).filter((id) => id !== magazineId);
+  saveDb(db);
+  res.json({ removed: true, scope: 'left' });
 });
 
 app.get('/api/magazines/:magazineId/products', authMiddleware, magazineAccessMiddleware, (req, res) => {

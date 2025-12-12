@@ -1,5 +1,6 @@
 const productListEl = document.getElementById('productList');
 const appShell = document.querySelector('.app-shell');
+appShell.style.display = 'none';
 const searchInput = document.getElementById('searchInput');
 const codeInput = document.getElementById('codeInput');
 const sortSelect = document.getElementById('sortSelect');
@@ -73,7 +74,7 @@ function restoreAuth() {
   if (!stored) return;
   try {
     const parsed = JSON.parse(stored);
-    auth = { token: parsed.token || null, user: parsed.user || null, magazine: parsed.magazine || null };
+    auth = { token: parsed.token || null, user: parsed.user || null, magazine: null };
   } catch (error) {
     console.error('Nie udało się odczytać danych logowania', error);
   }
@@ -122,7 +123,16 @@ async function apiRequest(path, options = {}) {
     headers.Authorization = `Bearer ${auth.token}`;
   }
 
-  const response = await fetch(`${API_URL}${path}`, { ...options, headers });
+  const response = await fetch(`${API_URL}${path}`, { ...options, headers }).catch(() => {
+    throw new Error('Brak połączenia z serwerem');
+  });
+
+  if (response.status === 401) {
+    auth = { token: null, user: null, magazine: null };
+    persistAuth(auth);
+    throw new Error('Sesja wygasła. Zaloguj się ponownie.');
+  }
+
   if (!response.ok) {
     const message = await response.json().catch(() => ({ message: 'Błąd serwera' }));
     throw new Error(message.message || 'Nie udało się wykonać żądania');
@@ -155,7 +165,11 @@ async function upsertProduct(product) {
       body: JSON.stringify(product),
     });
     const index = products.findIndex((p) => p.id === updated.id);
-    products[index] = updated;
+    if (index === -1) {
+      products.unshift(updated);
+    } else {
+      products[index] = updated;
+    }
     return updated;
   }
 
@@ -649,7 +663,23 @@ function handleAddImages(files) {
   const product = products.find((p) => p.id === selectedProductId);
   if (!product) return;
 
-  const readers = Array.from(files).map(
+  const MAX_FILES = 8;
+  const MAX_IMAGE_SIZE = 2.5 * 1024 * 1024; // ~2.5MB
+  const MAX_TOTAL = 12;
+
+  const validFiles = Array.from(files).filter((file) => {
+    if (file.size > MAX_IMAGE_SIZE) {
+      alert(`Plik "${file.name}" jest za duży (limit 2.5MB).`);
+      return false;
+    }
+    return true;
+  });
+
+  const remainingSlots = Math.max(0, MAX_TOTAL - (product.images?.length || 0));
+  const filesToRead = validFiles.slice(0, Math.min(remainingSlots, MAX_FILES));
+  if (filesToRead.length === 0) return;
+
+  const readers = filesToRead.map(
     (file) =>
       new Promise((resolve) => {
         const reader = new FileReader();
@@ -658,13 +688,19 @@ function handleAddImages(files) {
       })
   );
 
-  Promise.all(readers).then((images) => {
+  Promise.all(readers).then(async (images) => {
+    const updated = { ...product, images: [...(product.images || [])] };
     images.forEach((dataUrl) => {
       const image = { id: crypto.randomUUID(), url: dataUrl };
-      product.images.push(image);
-      if (!product.mainImageId) product.mainImageId = image.id;
+      updated.images.push(image);
+      if (!updated.mainImageId) updated.mainImageId = image.id;
     });
-    syncProductAndRender(product);
+
+    try {
+      await syncProductAndRender(updated);
+    } catch (error) {
+      alert(error.message);
+    }
   });
 }
 
@@ -701,11 +737,14 @@ function renderMagazines() {
     meta.textContent = mag.ownerId === auth.user?.id ? 'Twój magazyn' : 'Udostępniony';
     info.append(title, meta);
 
-    const btn = document.createElement('button');
-    btn.className = 'primary';
-    btn.textContent = auth.magazine?.id === mag.id ? 'Aktywny' : 'Otwórz';
-    btn.disabled = auth.magazine?.id === mag.id;
-    btn.addEventListener('click', async () => {
+    const actions = document.createElement('div');
+    actions.className = 'mag-actions';
+
+    const openBtn = document.createElement('button');
+    openBtn.className = 'primary';
+    openBtn.textContent = auth.magazine?.id === mag.id ? 'Aktywny' : 'Otwórz';
+    openBtn.disabled = auth.magazine?.id === mag.id;
+    openBtn.addEventListener('click', async () => {
       auth.magazine = mag;
       persistAuth(auth);
       await loadProducts();
@@ -719,9 +758,37 @@ function renderMagazines() {
       render();
     });
 
-    item.append(info, btn);
+    const removeBtn = document.createElement('button');
+    removeBtn.className = 'ghost small danger';
+    const isOwner = mag.ownerId === auth.user?.id;
+    removeBtn.textContent = isOwner ? 'Usuń' : 'Usuń z listy';
+    removeBtn.addEventListener('click', () => handleRemoveMagazine(mag, isOwner));
+
+    actions.append(openBtn, removeBtn);
+    item.append(info, actions);
     magazineListEl.appendChild(item);
   });
+}
+
+async function handleRemoveMagazine(mag, isOwner) {
+  const question = isOwner
+    ? `Czy na pewno chcesz bezpowrotnie usunąć magazyn "${mag.name}"?`
+    : `Usunąć magazyn "${mag.name}" z Twojej listy?`;
+  if (!confirm(question)) return;
+
+  try {
+    await apiRequest(`/magazines/${mag.id}`, { method: 'DELETE' });
+    magazines = magazines.filter((m) => m.id !== mag.id);
+    if (auth.magazine?.id === mag.id) {
+      auth.magazine = null;
+      products = [];
+      selectedProductId = null;
+    }
+    persistAuth(auth);
+    render();
+  } catch (error) {
+    alert(error.message);
+  }
 }
 
 function updateShellVisibility() {
