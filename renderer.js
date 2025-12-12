@@ -32,6 +32,9 @@ const joinMagazineForm = document.getElementById('joinMagazineForm');
 const switchMagazineBtn = document.getElementById('switchMagazine');
 const accountStatus = document.getElementById('accountStatus');
 const magazineStatus = document.getElementById('magazineStatus');
+const apiBaseUrlInput = document.getElementById('apiBaseUrl');
+const saveApiUrlBtn = document.getElementById('saveApiUrl');
+const apiStatusEl = document.getElementById('apiStatus');
 
 const dropdowns = {
   brand: document.getElementById('brandDropdown'),
@@ -47,7 +50,10 @@ const datalists = {
   drop: document.getElementById('dropOptions'),
 };
 
-const API_URL = 'http://localhost:4000/api';
+const DEFAULT_API_BASE_URL = 'http://localhost:4000';
+const API_CONFIG_KEY = 'magazyn-api-config';
+
+let apiConfig = { baseUrl: DEFAULT_API_BASE_URL };
 
 let products = [];
 let selectedProductId = null;
@@ -72,6 +78,77 @@ function unlockProductForm() {
     el.disabled = false;
     el.removeAttribute('aria-disabled');
   });
+}
+
+function normalizeBaseUrl(url) {
+  return url.trim().replace(/\/+$/, '');
+}
+
+function persistApiConfig() {
+  localStorage.setItem(API_CONFIG_KEY, JSON.stringify(apiConfig));
+}
+
+function restoreApiConfig() {
+  const stored = localStorage.getItem(API_CONFIG_KEY);
+  if (!stored) {
+    apiBaseUrlInput.value = apiConfig.baseUrl;
+    return;
+  }
+
+  try {
+    const parsed = JSON.parse(stored);
+    if (parsed.baseUrl) {
+      apiConfig.baseUrl = normalizeBaseUrl(parsed.baseUrl);
+    }
+  } catch (error) {
+    console.error('Nie udało się odczytać ustawień API', error);
+  }
+
+  apiBaseUrlInput.value = apiConfig.baseUrl;
+}
+
+function getApiBaseUrl() {
+  return normalizeBaseUrl(apiConfig.baseUrl || DEFAULT_API_BASE_URL);
+}
+
+function setApiStatus(message) {
+  apiStatusEl.textContent = message;
+}
+
+async function validateApiConnection(baseUrl) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 7000);
+  try {
+    const response = await fetch(`${baseUrl}/healthz`, { signal: controller.signal });
+    if (!response.ok) throw new Error();
+    await response.json();
+  } catch (error) {
+    throw new Error('Brak połączenia z API pod wskazanym adresem');
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function saveApiBaseUrl(e) {
+  e.preventDefault();
+  const baseUrl = normalizeBaseUrl(apiBaseUrlInput.value || '');
+  if (!baseUrl) {
+    setApiStatus('Podaj adres API');
+    return;
+  }
+
+  saveApiUrlBtn.disabled = true;
+  setApiStatus('Sprawdzanie połączenia...');
+  try {
+    await validateApiConnection(baseUrl);
+    apiConfig.baseUrl = baseUrl;
+    persistApiConfig();
+    setApiStatus('Połączono z API i zapisano ustawienie.');
+  } catch (error) {
+    setApiStatus(error.message || 'Nie udało się zapisać adresu API');
+  } finally {
+    saveApiUrlBtn.disabled = false;
+  }
 }
 
 function persistAuth(data) {
@@ -196,7 +273,7 @@ async function apiRequest(path, options = {}) {
     headers.Authorization = `Bearer ${auth.token}`;
   }
 
-  const response = await fetch(`${API_URL}${path}`, { ...options, headers }).catch(() => {
+  const response = await fetch(`${getApiBaseUrl()}/api${path}`, { ...options, headers }).catch(() => {
     throw new Error('Brak połączenia z serwerem');
   });
 
@@ -1092,12 +1169,14 @@ joinMagazineForm.addEventListener('submit', handleJoinMagazine);
 logoutBtn.addEventListener('click', handleLogout);
 logoutAccountBtn.addEventListener('click', handleLogout);
 switchMagazineBtn.addEventListener('click', handleSwitchMagazine);
+saveApiUrlBtn.addEventListener('click', saveApiBaseUrl);
 
 toggleFormBtn.addEventListener('click', (e) => {
   e.preventDefault();
   toggleAuthForm();
 });
 
+restoreApiConfig();
 restoreAuth();
 fetchMagazines()
   .then(() => loadProducts())

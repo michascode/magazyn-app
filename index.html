@@ -12,6 +12,19 @@
 <body>
   <div id="authScreen" class="auth-screen">
     <div class="auth-card">
+      <div class="auth-step connection-settings">
+        <h2>Połączenie z API</h2>
+        <p class="auth-subtitle">Podaj adres backendu (np. Render/Supabase). Ustawienie jest zapisywane na tym urządzeniu.</p>
+        <div class="api-url-row">
+          <div class="input-group">
+            <label for="apiBaseUrl">Adres API</label>
+            <input id="apiBaseUrl" type="url" placeholder="https://example.com" required />
+          </div>
+          <button id="saveApiUrl" class="ghost">Zapisz i sprawdź</button>
+        </div>
+        <p id="apiStatus" class="status muted"></p>
+      </div>
+
       <div id="accountStep" class="auth-step">
         <h1>MagazynApp</h1>
         <p class="auth-subtitle">Utwórz konto, a potem wybierz lub załóż magazyn chroniony hasłem.</p>
