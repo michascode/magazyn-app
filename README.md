@@ -1,6 +1,6 @@
-# Magazyn Vinted
+# Magazyn
 
-Desktopowa aplikacja magazynowa wspierająca ręczne wystawianie i zarządzanie produktami z myślą o Vinted. Zbudowana na Electronie, otwiera widok zgodny z makietą, oferuje filtry, listę produktów, paginację oraz panel edycji z obsługą wielu zdjęć, a dane magazynowe synchronizuje przez wbudowane API.
+Desktopowa aplikacja magazynowa wspierająca ręczne wystawianie i zarządzanie produktami. Zbudowana na Electronie, otwiera widok zgodny z makietą, oferuje filtry, listę produktów, paginację oraz panel edycji z obsługą wielu zdjęć, a dane magazynowe synchronizuje przez wbudowane API.
 
 ## Wymagania
 - Node.js 18+
