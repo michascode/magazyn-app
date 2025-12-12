@@ -26,6 +26,16 @@ Desktopowa aplikacja magazynowa wspierająca ręczne wystawianie i zarządzanie 
    ```
    Serwer Express ładuje zmienne z `.env` na starcie; jeżeli `DATABASE_URL` nie jest ustawiony, pracuje na lokalnym pliku JSON.
 
+### Lekki frontend web + PWA
+- Staticzne pliki (`index.html`, `styles.css`, `renderer.js`, `manifest.webmanifest`, `service-worker.js` oraz katalog `icons/`) możesz
+  wystawić dowolnym serwerem statycznym (np. `npx serve .`).
+- Ikona PWA jest zapisana w `icons/icon.svg` (tekstowo, bez binarnych PNG), żeby PR-y nie blokowały się na dodawaniu obrazków; możesz ją
+  łatwo podmienić na własną.
+- Ustaw `CORS_ORIGINS` w backendzie tak, aby wskazać domenę frontendu (np. `https://twoja-domena.pl`), dzięki czemu zapytania `fetch`
+  z nagłówkiem `Authorization: Bearer <token>` przejdą prawidłowo.
+- Manifest i service worker włączają tryb „dodaj do ekranu głównego” i podstawowe cache’owanie offline UI.
+- Jeśli nie podasz `DATABASE_URL`, backend wystartuje w trybie lokalnym i zapisze dane w `server/data/db.json` (bez potrzeby uruchamiania migracji PostgreSQL).
+
 ## Klonowanie repozytorium (przykład PowerShell)
 ```powershell
 cd $env:USERPROFILE\Desktop

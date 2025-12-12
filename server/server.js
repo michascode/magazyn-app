@@ -1,4 +1,6 @@
 require('dotenv').config();
+const fs = require('fs');
+const path = require('path');
 const express = require('express');
 const cors = require('cors');
 const { Pool } = require('pg');
@@ -19,19 +21,47 @@ const CORS_ORIGINS = (process.env.CORS_ORIGINS || '')
   .filter(Boolean);
 const ALLOW_ALL_ORIGINS = CORS_ORIGINS.length === 0 || CORS_ORIGINS.includes('*');
 
-if (!DATABASE_URL) {
-  console.error('DATABASE_URL nie jest ustawiony. Uzupełnij konfigurację bazy danych.');
-  process.exit(1);
-}
-
 if (!process.env.JWT_SECRET) {
   console.warn('JWT_SECRET nie ustawiony - używany jest klucz deweloperski.');
 }
+const DATA_PATH = path.join(__dirname, 'data', 'db.json');
+const DEFAULT_DB = { users: [], magazines: [], memberships: {}, products: {} };
+const useMemoryStore = !DATABASE_URL;
 
-const pool = new Pool({
-  connectionString: DATABASE_URL,
-  ssl: DATABASE_SSL ? { rejectUnauthorized: false } : undefined,
-});
+function loadJsonDb() {
+  if (!fs.existsSync(DATA_PATH)) {
+    fs.mkdirSync(path.dirname(DATA_PATH), { recursive: true });
+    fs.writeFileSync(DATA_PATH, JSON.stringify(DEFAULT_DB, null, 2));
+    return { ...DEFAULT_DB };
+  }
+
+  let client;
+  try {
+    const content = fs.readFileSync(DATA_PATH, 'utf-8');
+    const parsed = JSON.parse(content);
+    return { ...DEFAULT_DB, ...parsed };
+  } catch (error) {
+    console.warn('Nie udało się wczytać server/data/db.json, używam pustego zestawu danych.');
+    return { ...DEFAULT_DB };
+  }
+}
+
+function persistJsonDb(db) {
+  fs.writeFileSync(DATA_PATH, JSON.stringify(db, null, 2));
+}
+
+const memoryDb = useMemoryStore ? loadJsonDb() : null;
+
+if (useMemoryStore) {
+  console.warn('DATABASE_URL nie ustawiony – API korzysta z lokalnego pliku server/data/db.json.');
+}
+
+const pool = useMemoryStore
+  ? null
+  : new Pool({
+      connectionString: DATABASE_URL,
+      ssl: DATABASE_SSL ? { rejectUnauthorized: false } : undefined,
+    });
 
 const corsOptions = {
   origin(origin, callback) {
@@ -40,11 +70,15 @@ const corsOptions = {
     }
     return callback(null, false);
   },
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true,
   optionsSuccessStatus: 200,
 };
 
 const app = express();
 app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
 app.use(express.json({ limit: '50mb' }));
 
 function buildQueryFilters(query, startingIndex = 1) {
@@ -102,6 +136,27 @@ function mapOrderBy(sort) {
   }
 }
 
+function getMemberships(userId) {
+  if (!useMemoryStore) return [];
+  const list = memoryDb.memberships[userId] || [];
+  return Array.from(new Set(list));
+}
+
+function ensureMembership(userId, warehouseId) {
+  if (!useMemoryStore) return;
+  const list = getMemberships(userId);
+  if (!list.includes(warehouseId)) {
+    memoryDb.memberships[userId] = [...list, warehouseId];
+  }
+}
+
+function removeMembership(userId, warehouseId) {
+  if (!useMemoryStore) return;
+  const list = getMemberships(userId).filter((id) => id !== warehouseId);
+  if (list.length > 0) memoryDb.memberships[userId] = list;
+  else delete memoryDb.memberships[userId];
+}
+
 function mapProductRow(row) {
   const images = Array.isArray(row.images) ? row.images : [];
   const mainImageId = row.mainImageId || images[0]?.id || null;
@@ -126,6 +181,23 @@ function mapProductRow(row) {
 }
 
 async function fetchAvailableFilters(magazineId) {
+  if (useMemoryStore) {
+    const products = memoryDb.products[magazineId] || [];
+    const acc = { brand: new Set(), size: new Set(), condition: new Set(), drop: new Set() };
+    products.forEach((p) => {
+      if (p.brand) acc.brand.add(p.brand);
+      if (p.size) acc.size.add(p.size);
+      if (p.condition) acc.condition.add(p.condition);
+      if (p.drop) acc.drop.add(p.drop);
+    });
+    return {
+      brand: Array.from(acc.brand),
+      size: Array.from(acc.size),
+      condition: Array.from(acc.condition),
+      drop: Array.from(acc.drop),
+    };
+  }
+
   const { rows } = await pool.query(
     `SELECT
       array_remove(array_agg(DISTINCT brand), NULL) AS brand,
@@ -171,6 +243,81 @@ function createToken(userId) {
   return jwt.sign({ sub: userId }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
 }
 
+function findUserByLogin(login) {
+  if (!useMemoryStore) return null;
+  return memoryDb.users.find((u) => u.username.toLowerCase() === login.toLowerCase()) || null;
+}
+
+function findMagazineByName(name) {
+  if (!useMemoryStore) return null;
+  return memoryDb.magazines.find((m) => m.name.toLowerCase() === name.toLowerCase()) || null;
+}
+
+function persistMemoryDb() {
+  if (!useMemoryStore) return;
+  persistJsonDb(memoryDb);
+}
+
+function mapMemoryProduct(raw) {
+  const images = Array.isArray(raw.images) ? raw.images : [];
+  return {
+    ...raw,
+    createdAt: raw.createdAt ?? Date.now(),
+    price: raw.price ?? null,
+    a: raw.a ?? null,
+    b: raw.b ?? null,
+    c: raw.c ?? null,
+    images,
+    mainImageId: raw.mainImageId || images[0]?.id || null,
+  };
+}
+
+function filterMemoryProducts(products = [], query = {}) {
+  return products.filter((p) => {
+    if (query.search && !p.name?.toLowerCase().includes(query.search.toLowerCase())) return false;
+    if (query.code && !p.code?.toLowerCase().includes(query.code.toLowerCase())) return false;
+
+    const checkList = (key) => {
+      const value = query[key];
+      if (!value) return true;
+      const allowed = value
+        .split(',')
+        .map((v) => v.trim())
+        .filter(Boolean);
+      if (allowed.length === 0) return true;
+      return allowed.includes(p[key]);
+    };
+
+    return checkList('brand') && checkList('size') && checkList('condition') && checkList('drop');
+  });
+}
+
+function sortMemoryProducts(products = [], sort) {
+  const list = [...products];
+  switch (sort) {
+    case 'cena-rosnaco':
+      list.sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity));
+      break;
+    case 'cena-malejaco':
+      list.sort((a, b) => (b.price ?? -Infinity) - (a.price ?? -Infinity));
+      break;
+    case 'az':
+      list.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+      break;
+    case 'za':
+      list.sort((a, b) => (b.name || '').localeCompare(a.name || ''));
+      break;
+    case 'najstarsze':
+      list.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+      break;
+    case 'najnowsze':
+    default:
+      list.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+      break;
+  }
+  return list;
+}
+
 async function authMiddleware(req, res, next) {
   const header = req.headers.authorization || '';
   if (!header.startsWith('Bearer ')) {
@@ -180,12 +327,18 @@ async function authMiddleware(req, res, next) {
 
   try {
     const payload = jwt.verify(token, JWT_SECRET);
-    const { rows } = await pool.query('SELECT id, login FROM users WHERE id = $1', [payload.sub]);
-    const user = rows[0];
-    if (!user) {
-      return res.status(401).json({ message: 'Niepoprawny token' });
+    if (useMemoryStore) {
+      const user = memoryDb.users.find((u) => u.id === payload.sub);
+      if (!user) return res.status(401).json({ message: 'Niepoprawny token' });
+      req.user = { id: user.id, username: user.username };
+    } else {
+      const { rows } = await pool.query('SELECT id, login FROM users WHERE id = $1', [payload.sub]);
+      const user = rows[0];
+      if (!user) {
+        return res.status(401).json({ message: 'Niepoprawny token' });
+      }
+      req.user = { id: user.id, username: user.login };
     }
-    req.user = { id: user.id, username: user.login };
     next();
   } catch (error) {
     if (error.name === 'TokenExpiredError') {
@@ -198,20 +351,30 @@ async function authMiddleware(req, res, next) {
 async function magazineAccessMiddleware(req, res, next) {
   const { magazineId } = req.params;
   try {
-    const { rows } = await pool.query(
-      `SELECT w.id, w.name, w.owner_id
-       FROM warehouses w
-       INNER JOIN warehouse_memberships wm ON wm.warehouse_id = w.id
-       WHERE wm.user_id = $1 AND w.id = $2`,
-      [req.user.id, magazineId]
-    );
+    if (useMemoryStore) {
+      const memberships = getMemberships(req.user.id);
+      if (!memberships.includes(magazineId)) {
+        return res.status(403).json({ message: 'Brak dostępu do magazynu' });
+      }
+      const magazine = memoryDb.magazines.find((m) => m.id === magazineId);
+      if (!magazine) return res.status(404).json({ message: 'Magazyn nie istnieje' });
+      req.magazine = { id: magazine.id, name: magazine.name, ownerId: magazine.ownerId };
+    } else {
+      const { rows } = await pool.query(
+        `SELECT w.id, w.name, w.owner_id
+         FROM warehouses w
+         INNER JOIN warehouse_memberships wm ON wm.warehouse_id = w.id
+         WHERE wm.user_id = $1 AND w.id = $2`,
+        [req.user.id, magazineId]
+      );
 
-    const magazine = rows[0];
-    if (!magazine) {
-      return res.status(403).json({ message: 'Brak dostępu do magazynu' });
+      const magazine = rows[0];
+      if (!magazine) {
+        return res.status(403).json({ message: 'Brak dostępu do magazynu' });
+      }
+
+      req.magazine = { id: magazine.id, name: magazine.name, ownerId: magazine.owner_id };
     }
-
-    req.magazine = { id: magazine.id, name: magazine.name, ownerId: magazine.owner_id };
     next();
   } catch (error) {
     res.status(500).json({ message: 'Nie udało się zweryfikować dostępu' });
@@ -225,6 +388,19 @@ app.post('/api/auth/register', async (req, res) => {
   }
 
   try {
+    if (useMemoryStore) {
+      const exists = findUserByLogin(username);
+      if (exists) return res.status(409).json({ message: 'Użytkownik o takim nicku już istnieje' });
+
+      const id = uuid();
+      const passwordHash = await bcrypt.hash(password, 10);
+      memoryDb.users.push({ id, username, password: passwordHash });
+      persistMemoryDb();
+
+      const token = createToken(id);
+      return res.status(201).json({ token, user: { id, username } });
+    }
+
     const existing = await pool.query('SELECT 1 FROM users WHERE LOWER(login) = LOWER($1)', [username]);
     if (existing.rowCount > 0) {
       return res.status(409).json({ message: 'Użytkownik o takim nicku już istnieje' });
@@ -252,6 +428,17 @@ app.post('/api/auth/login', async (req, res) => {
   }
 
   try {
+    if (useMemoryStore) {
+      const user = findUserByLogin(username);
+      if (!user) return res.status(401).json({ message: 'Niepoprawny nick lub hasło' });
+
+      const valid = await verifyPassword(password, user.password);
+      if (!valid) return res.status(401).json({ message: 'Niepoprawny nick lub hasło' });
+
+      const token = createToken(user.id);
+      return res.json({ token, user: { id: user.id, username: user.username } });
+    }
+
     const { rows } = await pool.query('SELECT id, login, password_hash FROM users WHERE LOWER(login) = LOWER($1)', [
       username,
     ]);
@@ -276,6 +463,14 @@ app.post('/api/auth/login', async (req, res) => {
 
 app.get('/api/magazines', authMiddleware, async (req, res) => {
   try {
+    if (useMemoryStore) {
+      const magazineIds = getMemberships(req.user.id);
+      const list = memoryDb.magazines
+        .filter((m) => magazineIds.includes(m.id))
+        .sort((a, b) => a.name.localeCompare(b.name));
+      return res.json(list.map((m) => ({ id: m.id, name: m.name, ownerId: m.ownerId })));
+    }
+
     const { rows } = await pool.query(
       `SELECT w.id, w.name, w.owner_id
        FROM warehouses w
@@ -296,8 +491,21 @@ app.post('/api/magazines', authMiddleware, async (req, res) => {
     return res.status(400).json({ message: 'Wymagany nick i hasło magazynu' });
   }
 
-  const client = await pool.connect();
   try {
+    if (useMemoryStore) {
+      const existing = findMagazineByName(name);
+      if (existing) return res.status(409).json({ message: 'Magazyn o tej nazwie już istnieje' });
+
+      const id = uuid();
+      const passwordHash = await bcrypt.hash(password, 10);
+      memoryDb.magazines.push({ id, name, password: passwordHash, ownerId: req.user.id });
+      ensureMembership(req.user.id, id);
+      persistMemoryDb();
+
+      return res.status(201).json({ id, name, ownerId: req.user.id });
+    }
+
+    client = await pool.connect();
     await client.query('BEGIN');
     const passwordHash = await bcrypt.hash(password, 10);
     const id = uuid();
@@ -314,13 +522,13 @@ app.post('/api/magazines', authMiddleware, async (req, res) => {
     await client.query('COMMIT');
     res.status(201).json({ id, name, ownerId: req.user.id });
   } catch (error) {
-    await client.query('ROLLBACK');
+    if (client) await client.query('ROLLBACK');
     if (error.code === '23505') {
       return res.status(409).json({ message: 'Magazyn o takim nicku już istnieje' });
     }
     res.status(500).json({ message: 'Nie udało się utworzyć magazynu' });
   } finally {
-    client.release();
+    client?.release();
   }
 });
 
@@ -331,6 +539,18 @@ app.post('/api/magazines/connect', authMiddleware, async (req, res) => {
   }
 
   try {
+    if (useMemoryStore) {
+      const magazine = findMagazineByName(name);
+      if (!magazine) return res.status(401).json({ message: 'Niepoprawna nazwa magazynu lub hasło' });
+
+      const valid = await verifyPassword(password, magazine.password);
+      if (!valid) return res.status(401).json({ message: 'Niepoprawna nazwa magazynu lub hasło' });
+
+      ensureMembership(req.user.id, magazine.id);
+      persistMemoryDb();
+      return res.json({ id: magazine.id, name: magazine.name, ownerId: magazine.ownerId });
+    }
+
     const { rows } = await pool.query('SELECT * FROM warehouses WHERE LOWER(name) = LOWER($1)', [name]);
     const magazine = rows[0];
     if (!magazine) {
@@ -358,6 +578,23 @@ app.post('/api/magazines/connect', authMiddleware, async (req, res) => {
 app.delete('/api/magazines/:magazineId', authMiddleware, magazineAccessMiddleware, async (req, res) => {
   const { magazineId } = req.params;
   try {
+    if (useMemoryStore) {
+      const magazine = memoryDb.magazines.find((m) => m.id === magazineId);
+      if (!magazine) return res.status(404).json({ message: 'Magazyn nie istnieje' });
+
+      if (magazine.ownerId === req.user.id) {
+        memoryDb.magazines = memoryDb.magazines.filter((m) => m.id !== magazineId);
+        delete memoryDb.products[magazineId];
+        Object.keys(memoryDb.memberships).forEach((userId) => removeMembership(userId, magazineId));
+        persistMemoryDb();
+        return res.json({ removed: true, scope: 'deleted' });
+      }
+
+      removeMembership(req.user.id, magazineId);
+      persistMemoryDb();
+      return res.json({ removed: true, scope: 'left' });
+    }
+
     const { rows } = await pool.query('SELECT owner_id FROM warehouses WHERE id = $1', [magazineId]);
     const magazine = rows[0];
     if (!magazine) return res.status(404).json({ message: 'Magazyn nie istnieje' });
@@ -383,6 +620,23 @@ app.get('/api/magazines/:magazineId/products', authMiddleware, magazineAccessMid
   const offset = (page - 1) * pageSize;
 
   try {
+    if (useMemoryStore) {
+      const warehouseProducts = (memoryDb.products[req.magazine.id] || []).map(mapMemoryProduct);
+      const filtered = filterMemoryProducts(warehouseProducts, req.query);
+      const sorted = sortMemoryProducts(filtered, req.query.sort);
+      const total = sorted.length;
+      const paged = sorted.slice(offset, offset + pageSize);
+      const filtersData = await fetchAvailableFilters(req.magazine.id);
+
+      return res.json({
+        items: paged,
+        total,
+        page,
+        pageSize,
+        filters: filtersData,
+      });
+    }
+
     const filters = buildQueryFilters(req.query, 2);
     const baseConditions = ['p.warehouse_id = $1', ...filters.conditions];
     const whereClause = baseConditions.length ? `WHERE ${baseConditions.join(' AND ')}` : '';
@@ -454,9 +708,20 @@ app.post('/api/magazines/:magazineId/products', authMiddleware, magazineAccessMi
   const product = req.body || {};
   const id = product.id || uuid();
   const createdAt = product.createdAt ? new Date(product.createdAt) : new Date();
-  const client = await pool.connect();
 
+  let client;
   try {
+    if (useMemoryStore) {
+      const existing = (memoryDb.products[req.magazine.id] || []).find((p) => p.id === id);
+      if (existing) return res.status(409).json({ message: 'Produkt już istnieje' });
+
+      const entry = mapMemoryProduct({ ...product, id, createdAt: createdAt.getTime(), warehouseId: req.magazine.id });
+      memoryDb.products[req.magazine.id] = [...(memoryDb.products[req.magazine.id] || []), entry];
+      persistMemoryDb();
+      return res.status(201).json(entry);
+    }
+
+    client = await pool.connect();
     await client.query('BEGIN');
     await client.query(
       `INSERT INTO products (
@@ -500,19 +765,37 @@ app.post('/api/magazines/:magazineId/products', authMiddleware, magazineAccessMi
 
     res.status(201).json(mapProductRow(rows[0]));
   } catch (error) {
-    await client.query('ROLLBACK');
+    if (client) await client.query('ROLLBACK');
     res.status(500).json({ message: 'Nie udało się utworzyć produktu' });
   } finally {
-    client.release();
+    client?.release();
   }
 });
 
 app.put('/api/magazines/:magazineId/products/:id', authMiddleware, magazineAccessMiddleware, async (req, res) => {
   const product = req.body || {};
   const { id } = req.params;
-  const client = await pool.connect();
 
+  let client;
   try {
+    if (useMemoryStore) {
+      const products = memoryDb.products[req.magazine.id] || [];
+      const index = products.findIndex((p) => p.id === id);
+      if (index === -1) return res.status(404).json({ message: 'Produkt nie istnieje' });
+
+      const merged = mapMemoryProduct({
+        ...products[index],
+        ...product,
+        id,
+        createdAt: product.createdAt ?? products[index].createdAt ?? Date.now(),
+      });
+      products[index] = merged;
+      memoryDb.products[req.magazine.id] = products;
+      persistMemoryDb();
+      return res.json(merged);
+    }
+
+    client = await pool.connect();
     await client.query('BEGIN');
     const result = await client.query(
       `UPDATE products SET
@@ -571,16 +854,25 @@ app.put('/api/magazines/:magazineId/products/:id', authMiddleware, magazineAcces
 
     res.json(mapProductRow(rows[0]));
   } catch (error) {
-    await client.query('ROLLBACK');
+    if (client) await client.query('ROLLBACK');
     res.status(500).json({ message: 'Nie udało się zaktualizować produktu' });
   } finally {
-    client.release();
+    client?.release();
   }
 });
 
 app.delete('/api/magazines/:magazineId/products/:id', authMiddleware, magazineAccessMiddleware, async (req, res) => {
   const { id } = req.params;
   try {
+    if (useMemoryStore) {
+      const products = memoryDb.products[req.magazine.id] || [];
+      const next = products.filter((p) => p.id !== id);
+      if (next.length === products.length) return res.status(404).json({ message: 'Produkt nie istnieje' });
+      memoryDb.products[req.magazine.id] = next;
+      persistMemoryDb();
+      return res.status(204).end();
+    }
+
     const result = await pool.query('DELETE FROM products WHERE id = $1 AND warehouse_id = $2', [
       id,
       req.magazine.id,
@@ -596,7 +888,9 @@ app.delete('/api/magazines/:magazineId/products/:id', authMiddleware, magazineAc
 
 app.get('/healthz', async (req, res) => {
   try {
-    await pool.query('SELECT 1');
+    if (!useMemoryStore) {
+      await pool.query('SELECT 1');
+    }
     res.json({ status: 'ok' });
   } catch (error) {
     console.error('Healthcheck failed', error);

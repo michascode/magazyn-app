@@ -273,7 +273,12 @@ async function apiRequest(path, options = {}) {
     headers.Authorization = `Bearer ${auth.token}`;
   }
 
-  const response = await fetch(`${getApiBaseUrl()}/api${path}`, { ...options, headers }).catch(() => {
+  const response = await fetch(`${getApiBaseUrl()}/api${path}`, {
+    mode: 'cors',
+    credentials: 'include',
+    ...options,
+    headers,
+  }).catch(() => {
     throw new Error('Brak połączenia z serwerem');
   });
 
