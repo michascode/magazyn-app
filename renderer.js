@@ -132,6 +132,26 @@ function resetAuthStatus() {
   forceUnlockAuthUi(defaultForm);
 }
 
+function resetAppToInitialState() {
+  auth = { token: null, user: null, magazine: null };
+  products = [];
+  selectedProductId = null;
+  persistAuth(auth);
+  loginForm.reset();
+  registerForm.reset();
+  createMagazineForm.reset();
+  joinMagazineForm.reset();
+  loginForm.classList.remove('hidden');
+  registerForm.classList.add('hidden');
+  accountStep.classList.remove('hidden');
+  magazineStep.classList.add('hidden');
+  accountStatus.textContent = '';
+  magazineStatus.textContent = '';
+  authScreen.classList.remove('hidden');
+  appShell.style.display = 'none';
+  forceUnlockAuthUi(loginForm);
+}
+
 function forceUnlockAuthUi(formToFocus) {
   authScreen.querySelectorAll('input, button, select, textarea').forEach((el) => {
     el.disabled = false;
@@ -154,6 +174,7 @@ async function runAuthAction(form, statusEl, workingMessage, action) {
     const message = error.message || 'Operacja nie powiodła się';
     if (statusEl) statusEl.textContent = message;
     alert(message);
+    resetAppToInitialState();
     return null;
   } finally {
     setFormBusy(form, statusEl, false, statusEl?.textContent || '');
