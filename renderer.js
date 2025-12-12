@@ -107,6 +107,16 @@ function enableAuthInputs() {
   });
 }
 
+function forceEnableAuthForms() {
+  [loginForm, registerForm, createMagazineForm, joinMagazineForm].forEach((form) => {
+    if (!form) return;
+    form.querySelectorAll('input, button, select, textarea').forEach((el) => {
+      el.disabled = false;
+      el.removeAttribute('aria-disabled');
+    });
+  });
+}
+
 function resetAuthStatus() {
   accountStatus.textContent = '';
   magazineStatus.textContent = '';
@@ -117,6 +127,7 @@ function resetAuthStatus() {
     });
   });
   enableAuthInputs();
+  forceEnableAuthForms();
 }
 
 async function runAuthAction(form, statusEl, workingMessage, action) {
@@ -133,6 +144,9 @@ async function runAuthAction(form, statusEl, workingMessage, action) {
   } finally {
     setFormBusy(form, statusEl, false, statusEl?.textContent || '');
     enableAuthInputs();
+    forceEnableAuthForms();
+    const focusable = form.querySelector('input:not([type="hidden"]):not([disabled])');
+    focusable?.focus();
   }
 }
 
