@@ -178,8 +178,6 @@ async function runAuthAction(form, statusEl, workingMessage, action) {
   } catch (error) {
     const message = error.message || 'Operacja nie powiodła się';
     if (statusEl) statusEl.textContent = message;
-    alert(message);
-    resetAppToInitialState();
     return null;
   } finally {
     setFormBusy(form, statusEl, false, statusEl?.textContent || '');
@@ -995,6 +993,7 @@ function render() {
   const ready = Boolean(auth.token && auth.magazine);
   updateShellVisibility();
   if (!auth.token) {
+    enableAuthInputs();
     resetAuthStatus();
     accountStep.classList.remove('hidden');
     magazineStep.classList.add('hidden');
