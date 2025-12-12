@@ -51,6 +51,28 @@ npm run api   # startuje prosty serwer HTTP na porcie 4000 z persystencją w ser
 npm start
 ```
 
+## Hosting (Render Free/Starter lub Fly.io / DigitalOcean App Platform)
+
+### Zmienne środowiskowe wymagane na serwerze
+- `DATABASE_URL` – connection string do bazy PostgreSQL.
+- `DATABASE_SSL` – `true` jeśli dostawca (np. Supabase) wymusza SSL.
+- `JWT_SECRET` – klucz do podpisywania tokenów (ustaw własną, silną wartość).
+- `JWT_EXPIRES_IN` – np. `1d` (domyślnie) lub `12h`.
+- `CORS_ORIGINS` – lista dozwolonych originów rozdzielonych przecinkami (np. `https://twoja-apka-web.pl,https://desktop.app`). Ustaw `*` lub pozostaw puste, aby dopuścić wszystkie (np. w trybie desktop/Electron). 
+- `PORT` – port nasłuchu API (domyślnie 4000).
+
+### Render (rekomendowane dla Free/Starter)
+1. Podłącz repozytorium do Render i utwórz **Web Service** z plikiem `render.yaml` (Render automatycznie wykryje konfigurację Dockerową).
+2. W kroku „Environment” dodaj zmienne z listy powyżej. `DATABASE_URL`, `JWT_SECRET` i `CORS_ORIGINS` oznacz jako **Protected/Hidden**.
+3. Build command: `npm install && npm run build`. Start command: `npm run start:server`. Port: `4000`. Healthcheck path: `/healthz` (Render przejdzie test dopiero po połączeniu z bazą).
+4. Włącz **Auto Deploy** dla gałęzi `main` lub `work` (przełączenie w zakładce „Settings → Auto Deploy”). Dzięki temu każdy push na wybraną gałąź uruchomi nowy build i deploy.
+5. Logi są dostępne w zakładce „Logs”; można dodać alerty (Render Alerts) lub spiąć z webhookiem, aby monitorować błędy startu i zapytań.
+
+### Fly.io lub DigitalOcean App Platform (alternatywa)
+- Użyj dołączonego `Dockerfile` (Node 20 Alpine) – startuje `npm run start:server`, eksponuje port `4000` i sprawdza `/healthz` przez `HEALTHCHECK` (zapytanie HTTP do `http://127.0.0.1:4000/healthz`).
+- Na Fly.io: `flyctl launch --no-deploy`, ustaw sekrety `DATABASE_URL`, `JWT_SECRET`, `CORS_ORIGINS`, a następnie `flyctl deploy`. Logi: `flyctl logs`. Healthcheck przejdzie, gdy baza odpowie na `SELECT 1`.
+- Na DigitalOcean App Platform: utwórz nową aplikację typu **Web Service** z repo, ustaw Dockerfile jako źródło, komendę startu `npm run start:server`, dodaj health check `/healthz` i przypisz zmienne środowiskowe. Włącz automatyczne deploye z gałęzi `main/work` oraz podgląd logów w panelu.
+
 ## Konfiguracja bazy PostgreSQL (np. Supabase EU/Frankfurt)
 Skrypt `npm run migrate` tworzy schemat tabel: `users` (login, password_hash, role), `warehouses`, `warehouse_memberships`, `products`, `product_images`, `sessions` i zasila je danymi z `server/data/db.json`.
 

@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: magazyn-api
+    plan: free
+    env: node
+    autoDeploy: true
+    healthCheckPath: /healthz
+    buildCommand: "npm install && npm run build"
+    startCommand: "npm run start:server"
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: DATABASE_SSL
+        value: "true"
+      - key: JWT_SECRET
+        sync: false
+      - key: JWT_EXPIRES_IN
+        value: "1d"
+      - key: CORS_ORIGINS
+        sync: false
+      - key: PORT
+        value: "4000"
