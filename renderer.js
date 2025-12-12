@@ -88,8 +88,12 @@ function restoreAuth() {
 }
 
 function setFormBusy(form, statusEl, busy, message = '') {
-  const submitBtn = form.querySelector('button[type="submit"]');
-  if (submitBtn) submitBtn.disabled = busy;
+  const controls = Array.from(form.querySelectorAll('input, button, select, textarea'));
+  controls.forEach((el) => {
+    el.disabled = busy;
+    if (busy) el.setAttribute('aria-disabled', 'true');
+    else el.removeAttribute('aria-disabled');
+  });
 
   if (statusEl) {
     statusEl.textContent = message;
@@ -128,7 +132,7 @@ async function runAuthAction(form, statusEl, workingMessage, action) {
     return null;
   } finally {
     setFormBusy(form, statusEl, false, statusEl?.textContent || '');
-    resetAuthStatus();
+    enableAuthInputs();
   }
 }
 
@@ -660,7 +664,6 @@ async function handleNewProduct() {
   };
 
   const created = await upsertProduct(newProduct);
-  products = [created, ...products];
   selectedProductId = created.id;
   currentPage = 1;
   render();
