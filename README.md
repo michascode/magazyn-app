@@ -5,6 +5,45 @@
 
 Desktopowa aplikacja magazynowa wspierająca ręczne wystawianie i zarządzanie produktami. Zbudowana na Electronie, otwiera widok zgodny z makietą, oferuje filtry, listę produktów, paginację oraz panel edycji z obsługą wielu zdjęć, a dane magazynowe synchronizuje przez wbudowane API.
 
+## Co zrobić, żeby aplikacja była „produkcyjnie” dostępna z telefonu, tabletu i komputera
+Poniżej masz skróconą checklistę od „kod jest gotowy” do faktycznego używania na wszystkich urządzeniach.
+
+1. **Postaw backend online**
+   - Wybierz hosting (Render: użyj `render.yaml`; Fly.io/DO App Platform: użyj `Dockerfile`).
+   - Ustaw zmienne środowiskowe: `DATABASE_URL`, `DATABASE_SSL=true` (np. Supabase), `JWT_SECRET`, `JWT_EXPIRES_IN`, `CORS_ORIGINS` (np. `https://twoja-domena.pl,https://app.twojadomena.pl`).
+   - Sprawdź health check: `https://<twoj-backend>/healthz` – musi zwrócić `200`.
+   - Jeśli używasz S3/Supabase Storage: wprowadź `STORAGE_DRIVER=s3` i dane bucketa (`STORAGE_BUCKET`/`S3_BUCKET_NAME`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `STORAGE_REGION`, ewentualnie `STORAGE_ENDPOINT`, `STORAGE_PUBLIC_BASE_URL`).
+
+2. **Wystaw frontend web/PWA** (dostępny z telefonu/tabletu)
+   - Podmień w `index.html` i `manifest.webmanifest` pola `name`/`short_name`/`start_url` jeśli chcesz własny branding.
+   - Zbuduj lub po prostu wystaw statyczne pliki (`index.html`, `styles.css`, `renderer.js`, `manifest.webmanifest`, `service-worker.js`, `icons/`) na CDN/hostingu statycznym (np. Netlify, Vercel, Render Static Site). Startowy build nie wymaga bundlera.
+   - Ustaw `CORS_ORIGINS` backendu na domenę frontu. W `renderer.js` w sekcji ustawień „Adres API” wpisz URL backendu (zapisywany w localStorage), żeby telefon łączył się z produkcyjnym API.
+   - Na telefonie otwórz stronę i wybierz „Dodaj do ekranu głównego” – manifest + service worker zrobią z niej PWA.
+
+3. **Pakiet `.exe` dla Windows (desktop offline/online)**
+   - Na maszynie z Windows uruchom: `npm install` → `npm run package` – w `dist/` pojawi się instalator `MagazynApp Setup*.exe`.
+   - Po zainstalowaniu w ustawieniach aplikacji wprowadź produkcyjny `API_BASE_URL` (domyślnie `http://localhost:4000`), żeby korzystała z hostowanego serwera.
+   - Aktualizacje: buduj nową wersję instalatora i dystrybuuj użytkownikom (np. link do pobrania). Aplikacja korzysta z tych samych tokenów JWT, więc backend nie wymaga zmian.
+
+4. **Migracje i dane startowe**
+   - Przed pierwszym startem na serwerze uruchom `npm install` oraz `npm run migrate` (wykona schemat i przeniesie dane z `server/data/db.json`).
+   - Jeśli dane w chmurze są już wypełnione, `migrate` możesz pominąć lub wykonać na osobnej bazie testowej.
+
+5. **Konfiguracja domen i HTTPS**
+   - Skonfiguruj własną domenę (np. `app.twojadomena.pl` dla frontu, `api.twojadomena.pl` dla backendu). Włącz certyfikaty HTTPS w panelu hostingu.
+   - Jeżeli backend i frontend są na różnych domenach, dopisz oba originy w `CORS_ORIGINS`.
+
+6. **Monitoring i backupy**
+   - Włącz logi i alerty na hostingu (Render Alerts/Fly log ship). Dodaj rotację/retencję.
+   - W bazie (Supabase/managed Postgres) skonfiguruj automatyczne snapshoty. Eksportuj bucket zdjęć (S3) według polityki RPO.
+
+7. **Test końcowy z urządzeń**
+   - Na telefonie: wejdź na PWA, zaloguj się, sprawdź listę produktów, dodaj zdjęcie (upload do bucketa). Wyloguj i zaloguj ponownie.
+   - Na laptopie: uruchom desktop/Electron, ustaw ten sam adres API i potwierdź, że widzisz te same dane.
+   - Sprawdź wygasanie i odnawianie tokenów JWT (zaloguj po upływie `JWT_EXPIRES_IN`).
+
+Gotowe – w tym stanie serwer, web/PWA i desktop dzielą tę samą bazę i magazyn zdjęć, więc masz jeden wspólny magazyn dostępny z dowolnego miejsca.
+
 ## Wymagania
 - Node.js 18+
 - npm
