@@ -90,18 +90,33 @@ function restoreAuth() {
   }
 }
 
+const REQUEST_TIMEOUT_MS = 8000;
+
 async function apiRequest(path, options = {}) {
   const headers = options.headers ? { ...options.headers } : {};
   if (auth.token) {
     headers.Authorization = `Bearer ${auth.token}`;
   }
-  const response = await fetch(`${API_URL}${path}`, { ...options, headers });
-  if (!response.ok) {
-    const message = await response.json().catch(() => ({ message: 'Błąd serwera' }));
-    throw new Error(message.message || 'Nie udało się wykonać żądania');
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(`${API_URL}${path}`, { ...options, headers, signal: controller.signal });
+    if (!response.ok) {
+      const message = await response.json().catch(() => ({ message: 'Błąd serwera' }));
+      throw new Error(message.message || 'Nie udało się wykonać żądania');
+    }
+    if (response.status === 204) return null;
+    return response.json();
+  } catch (error) {
+    if (error.name === 'AbortError') {
+      throw new Error('Przekroczono czas oczekiwania na odpowiedź serwera');
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
   }
-  if (response.status === 204) return null;
-  return response.json();
 }
 
 async function fetchMagazines() {
