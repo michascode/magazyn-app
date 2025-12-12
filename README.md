@@ -68,8 +68,17 @@ npm start
 - `DATABASE_SSL` – `true` jeśli dostawca (np. Supabase) wymusza SSL.
 - `JWT_SECRET` – klucz do podpisywania tokenów (ustaw własną, silną wartość).
 - `JWT_EXPIRES_IN` – np. `1d` (domyślnie) lub `12h`.
-- `CORS_ORIGINS` – lista dozwolonych originów rozdzielonych przecinkami (np. `https://twoja-apka-web.pl,https://desktop.app`). Ustaw `*` lub pozostaw puste, aby dopuścić wszystkie (np. w trybie desktop/Electron). 
+- `CORS_ORIGINS` – lista dozwolonych originów rozdzielonych przecinkami (np. `https://twoja-apka-web.pl,https://desktop.app`). Ustaw `*` lub pozostaw puste, aby dopuścić wszystkie (np. w trybie desktop/Electron).
 - `PORT` – port nasłuchu API (domyślnie 4000).
+- `STORAGE_DRIVER` – `local` (domyślnie) lub `s3`. Dla `local` pliki lądują w `server/uploads` i są serwowane spod `/uploads/*`.
+- `STORAGE_BUCKET`/`S3_BUCKET_NAME`, `STORAGE_REGION`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `STORAGE_ENDPOINT` – dane dostępu do bucketa (np. S3, MinIO, Supabase). Obiekt zapisywany jest jako `products/<productId>/<uuid>.<ext>`.
+- `STORAGE_PUBLIC_BASE_URL` – opcjonalny publiczny host/CDN, jeżeli bucket jest publiczny. Gdy pozostawisz puste, backend zwróci podpisane URL-e (`STORAGE_SIGNED_URL_TTL` w sekundach, domyślnie 900) dla prywatnego bucketa.
+- `STORAGE_PUBLIC_PATH` – prefiks ścieżki dla trybu `local` (domyślnie `/uploads`).
+
+## Upload zdjęć produktów
+- Endpoint: `POST /api/magazines/:magazineId/products/:productId/images` (multipart/form-data z polem `file`).
+- Ścieżka do obiektu trafia do `product_images`, a API zwraca URL publiczny lub podpisany (zależnie od konfiguracji bucketa).
+- W trybie `local` pliki zapisują się w `server/uploads` i są serwowane spod `/uploads/*`; dla `s3` wykorzystywany jest prywatny bucket z podpisanymi linkami (`STORAGE_SIGNED_URL_TTL`).
 
 ### Render (rekomendowane dla Free/Starter)
 1. Podłącz repozytorium do Render i utwórz **Web Service** z plikiem `render.yaml` (Render automatycznie wykryje konfigurację Dockerową).

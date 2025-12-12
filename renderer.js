@@ -337,14 +337,26 @@ async function reloadProductsAndRender() {
   }
 }
 
+function serializeProductForSave(product) {
+  const images = (product.images || []).map((image, index) => ({
+    id: image.id,
+    url: image.storageKey || image.url,
+    storageKey: image.storageKey || image.url,
+    position: index,
+  }));
+
+  return { ...product, images };
+}
+
 async function upsertProduct(product) {
   if (!auth.magazine) throw new Error('Brak wybranego magazynu');
   const basePath = `/magazines/${auth.magazine.id}/products`;
+  const payload = serializeProductForSave(product);
   if (product.id) {
     const updated = await apiRequest(`${basePath}/${product.id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(product),
+      body: JSON.stringify(payload),
     });
     const index = products.findIndex((p) => p.id === updated.id);
     if (index === -1) {
@@ -358,7 +370,7 @@ async function upsertProduct(product) {
   const created = await apiRequest(basePath, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(product),
+    body: JSON.stringify(payload),
   });
   products.unshift(created);
   return created;
@@ -613,6 +625,7 @@ function renderProductList() {
       const img = document.createElement('img');
       img.src = mainImage.url;
       img.alt = product.name;
+      img.loading = 'lazy';
       thumb.appendChild(img);
     } else {
       thumb.textContent = 'Brak zdjęcia';
@@ -654,6 +667,7 @@ function renderGallery(product) {
     const img = document.createElement('img');
     img.src = image.url;
     img.alt = `${product.name} ${index + 1}`;
+    img.loading = 'lazy';
     tile.appendChild(img);
 
     if (product.mainImageId === image.id) {
@@ -718,6 +732,7 @@ function renderGallery(product) {
     const img = document.createElement('img');
     img.src = mainImage.url;
     img.alt = product.name;
+    img.loading = 'lazy';
     mainImageEl.appendChild(img);
   } else {
     const placeholder = document.createElement('div');
@@ -799,7 +814,7 @@ async function handleDeleteProduct() {
   render();
 }
 
-function handleAddImages(files) {
+async function handleAddImages(files) {
   const product = products.find((p) => p.id === selectedProductId);
   if (!product) return;
 
@@ -828,29 +843,34 @@ function handleAddImages(files) {
   const filesToRead = validFiles.slice(0, Math.min(remainingSlots, MAX_FILES));
   if (filesToRead.length === 0) return;
 
-  const readers = filesToRead.map(
-    (file) =>
-      new Promise((resolve) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result);
-        reader.readAsDataURL(file);
-      })
-  );
+  const uploadPath = `/magazines/${auth.magazine.id}/products/${product.id}/images`;
+  let lastUpdated = null;
 
-  Promise.all(readers).then(async (images) => {
-    const updated = { ...product, images: [...(product.images || [])] };
-    images.forEach((dataUrl) => {
-      const image = { id: crypto.randomUUID(), url: dataUrl };
-      updated.images.push(image);
-      if (!updated.mainImageId) updated.mainImageId = image.id;
-    });
+  for (const file of filesToRead) {
+    const formData = new FormData();
+    formData.append('file', file);
 
     try {
-      await syncProductAndRender(updated);
+      const updatedProduct = await apiRequest(uploadPath, { method: 'POST', body: formData });
+      lastUpdated = updatedProduct;
+      const index = products.findIndex((p) => p.id === updatedProduct.id);
+      if (index === -1) {
+        products.unshift(updatedProduct);
+      } else {
+        products[index] = updatedProduct;
+      }
     } catch (error) {
       alert(error.message);
+      break;
     }
-  });
+  }
+
+  if (lastUpdated) {
+    selectedProductId = lastUpdated.id;
+  }
+
+  await loadProducts();
+  render();
 }
 
 function renderDropdowns() {

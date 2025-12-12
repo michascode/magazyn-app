@@ -8,6 +8,8 @@ const { v4: uuid } = require('uuid');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
+const multer = require('multer');
+const storageService = require('./storage');
 
 const PORT = process.env.PORT || 4000;
 const JWT_SECRET = process.env.JWT_SECRET || 'development-secret';
@@ -20,6 +22,7 @@ const CORS_ORIGINS = (process.env.CORS_ORIGINS || '')
   .map((origin) => origin.trim())
   .filter(Boolean);
 const ALLOW_ALL_ORIGINS = CORS_ORIGINS.length === 0 || CORS_ORIGINS.includes('*');
+const upload = multer({ limits: { fileSize: 15 * 1024 * 1024 } });
 
 if (!process.env.JWT_SECRET) {
   console.warn('JWT_SECRET nie ustawiony - używany jest klucz deweloperski.');
@@ -80,6 +83,7 @@ const app = express();
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
 app.use(express.json({ limit: '50mb' }));
+app.use('/uploads', express.static(storageService.UPLOADS_DIR));
 
 function buildQueryFilters(query, startingIndex = 1) {
   const conditions = [];
@@ -157,13 +161,43 @@ function removeMembership(userId, warehouseId) {
   else delete memoryDb.memberships[userId];
 }
 
-function mapProductRow(row) {
+function prepareImagesForStore(images = []) {
+  return images.map((image, index) => {
+    const storageKey = image.storageKey || image.url;
+    return {
+      id: image.id || uuid(),
+      storageKey,
+      url: storageKey,
+      position: typeof image.position === 'number' ? image.position : index,
+    };
+  });
+}
+
+async function decorateProduct(product) {
+  const images = await Promise.all(
+    prepareImagesForStore(product.images || []).map(async (image) => {
+      try {
+        const resolvedUrl = await storageService.resolveImageUrl(image.storageKey);
+        return { ...image, url: resolvedUrl };
+      } catch (error) {
+        return { ...image, url: image.storageKey };
+      }
+    })
+  );
+
+  images.sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+  const mainImageId = product.mainImageId || images[0]?.id || null;
+
+  return { ...product, images, mainImageId };
+}
+
+function mapProductBase(row) {
   const images = Array.isArray(row.images) ? row.images : [];
   const mainImageId = row.mainImageId || images[0]?.id || null;
 
   return {
     id: row.id,
-    warehouseId: row.warehouse_id,
+    warehouseId: row.warehouse_id ?? row.warehouseId,
     name: row.name,
     brand: row.brand,
     size: row.size,
@@ -178,6 +212,10 @@ function mapProductRow(row) {
     images,
     mainImageId,
   };
+}
+
+async function mapProductRow(row) {
+  return decorateProduct(mapProductBase(row));
 }
 
 async function fetchAvailableFilters(magazineId) {
@@ -259,7 +297,7 @@ function persistMemoryDb() {
 }
 
 function mapMemoryProduct(raw) {
-  const images = Array.isArray(raw.images) ? raw.images : [];
+  const images = prepareImagesForStore(Array.isArray(raw.images) ? raw.images : []);
   return {
     ...raw,
     createdAt: raw.createdAt ?? Date.now(),
@@ -270,6 +308,48 @@ function mapMemoryProduct(raw) {
     images,
     mainImageId: raw.mainImageId || images[0]?.id || null,
   };
+}
+
+const PRODUCT_WITH_IMAGES_SELECT = `
+  SELECT
+    p.id,
+    p.warehouse_id,
+    p.name,
+    p.brand,
+    p.size,
+    p.condition,
+    p.drop_tag AS drop,
+    p.price,
+    p.code,
+    p.a,
+    p.b,
+    p.c,
+    p.main_image_id AS "mainImageId",
+    EXTRACT(EPOCH FROM p.created_at) * 1000 AS "createdAt",
+    COALESCE(
+      (
+        SELECT json_agg(json_build_object('id', i.id, 'url', i.url, 'position', i.position) ORDER BY i.position)
+        FROM product_images i
+        WHERE i.product_id = p.id
+      ),
+      '[]'
+    ) AS images
+  FROM products p
+`;
+
+async function fetchProductById(productId, warehouseId) {
+  if (useMemoryStore) {
+    const product = (memoryDb.products[warehouseId] || []).find((p) => p.id === productId);
+    if (!product) return null;
+    return decorateProduct(mapMemoryProduct(product));
+  }
+
+  const { rows } = await pool.query(
+    `${PRODUCT_WITH_IMAGES_SELECT} WHERE p.id = $1 AND p.warehouse_id = $2`,
+    [productId, warehouseId]
+  );
+  if (!rows[0]) return null;
+  return mapProductRow(rows[0]);
 }
 
 function filterMemoryProducts(products = [], query = {}) {
@@ -626,10 +706,11 @@ app.get('/api/magazines/:magazineId/products', authMiddleware, magazineAccessMid
       const sorted = sortMemoryProducts(filtered, req.query.sort);
       const total = sorted.length;
       const paged = sorted.slice(offset, offset + pageSize);
+      const hydrated = await Promise.all(paged.map(decorateProduct));
       const filtersData = await fetchAvailableFilters(req.magazine.id);
 
       return res.json({
-        items: paged,
+        items: hydrated,
         total,
         page,
         pageSize,
@@ -679,9 +760,10 @@ app.get('/api/magazines/:magazineId/products', authMiddleware, magazineAccessMid
 
     const { rows } = await pool.query(itemsQuery, [...params, pageSize, offset]);
     const filtersData = await fetchAvailableFilters(req.magazine.id);
+    const mappedItems = await Promise.all(rows.map(mapProductRow));
 
     res.json({
-      items: rows.map(mapProductRow),
+      items: mappedItems,
       total,
       page,
       pageSize,
@@ -695,19 +777,121 @@ app.get('/api/magazines/:magazineId/products', authMiddleware, magazineAccessMid
 async function persistImages(client, productId, images = []) {
   await client.query('DELETE FROM product_images WHERE product_id = $1', [productId]);
 
-  for (const [index, image] of images.entries()) {
+  const prepared = prepareImagesForStore(images);
+  for (const [index, image] of prepared.entries()) {
     const imageId = image.id || uuid();
+    const position = typeof image.position === 'number' ? image.position : index;
     await client.query(
       'INSERT INTO product_images (id, product_id, url, position) VALUES ($1, $2, $3, $4)',
-      [imageId, productId, image.url, index]
+      [imageId, productId, image.storageKey || image.url, position]
     );
   }
 }
+
+app.post(
+  '/api/magazines/:magazineId/products/:productId/images',
+  authMiddleware,
+  magazineAccessMiddleware,
+  upload.single('file'),
+  async (req, res) => {
+    const { productId } = req.params;
+    if (!req.file) {
+      return res.status(400).json({ message: 'Przekaż plik w polu "file"' });
+    }
+
+    const isImage = req.file.mimetype?.startsWith('image/');
+    if (!isImage) {
+      return res.status(400).json({ message: 'Wysyłane mogą być wyłącznie pliki graficzne' });
+    }
+
+    try {
+      if (useMemoryStore) {
+        const products = memoryDb.products[req.magazine.id] || [];
+        const index = products.findIndex((p) => p.id === productId);
+        if (index === -1) return res.status(404).json({ message: 'Produkt nie istnieje' });
+
+        const stored = await storageService.saveImage(req.file.buffer, {
+          filename: req.file.originalname,
+          mimeType: req.file.mimetype,
+          productId,
+        });
+
+        const position = products[index].images?.length || 0;
+        const imageId = uuid();
+        const nextImages = [
+          ...(products[index].images || []),
+          { id: imageId, url: stored.key, storageKey: stored.key, position },
+        ];
+        const updated = mapMemoryProduct({
+          ...products[index],
+          images: nextImages,
+          mainImageId: products[index].mainImageId || imageId,
+        });
+        products[index] = updated;
+        memoryDb.products[req.magazine.id] = products;
+        persistMemoryDb();
+        const payload = await decorateProduct(updated);
+        return res.status(201).json(payload);
+      }
+
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const { rows } = await client.query(
+          'SELECT id, main_image_id FROM products WHERE id = $1 AND warehouse_id = $2 FOR UPDATE',
+          [productId, req.magazine.id]
+        );
+
+        const product = rows[0];
+        if (!product) {
+          await client.query('ROLLBACK');
+          return res.status(404).json({ message: 'Produkt nie istnieje' });
+        }
+
+        const stored = await storageService.saveImage(req.file.buffer, {
+          filename: req.file.originalname,
+          mimeType: req.file.mimetype,
+          productId,
+        });
+
+        const positionResult = await client.query(
+          'SELECT COALESCE(MAX(position), -1) + 1 AS position FROM product_images WHERE product_id = $1',
+          [productId]
+        );
+        const position = Number(positionResult.rows[0]?.position ?? 0);
+        const imageId = uuid();
+
+        await client.query(
+          'INSERT INTO product_images (id, product_id, url, position) VALUES ($1, $2, $3, $4)',
+          [imageId, productId, stored.key, position]
+        );
+
+        if (!product.main_image_id) {
+          await client.query('UPDATE products SET main_image_id = $1 WHERE id = $2', [imageId, productId]);
+        }
+
+        await client.query('COMMIT');
+
+        const payload = await fetchProductById(productId, req.magazine.id);
+        return res.status(201).json(payload);
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      } finally {
+        // eslint-disable-next-line no-unused-expressions
+        client?.release();
+      }
+    } catch (error) {
+      res.status(500).json({ message: 'Nie udało się przesłać zdjęcia' });
+    }
+  }
+);
 
 app.post('/api/magazines/:magazineId/products', authMiddleware, magazineAccessMiddleware, async (req, res) => {
   const product = req.body || {};
   const id = product.id || uuid();
   const createdAt = product.createdAt ? new Date(product.createdAt) : new Date();
+  const mainImageId = product.mainImageId || product.images?.[0]?.id || null;
 
   let client;
   try {
@@ -715,10 +899,17 @@ app.post('/api/magazines/:magazineId/products', authMiddleware, magazineAccessMi
       const existing = (memoryDb.products[req.magazine.id] || []).find((p) => p.id === id);
       if (existing) return res.status(409).json({ message: 'Produkt już istnieje' });
 
-      const entry = mapMemoryProduct({ ...product, id, createdAt: createdAt.getTime(), warehouseId: req.magazine.id });
+      const entry = mapMemoryProduct({
+        ...product,
+        id,
+        mainImageId,
+        createdAt: createdAt.getTime(),
+        warehouseId: req.magazine.id,
+      });
       memoryDb.products[req.magazine.id] = [...(memoryDb.products[req.magazine.id] || []), entry];
       persistMemoryDb();
-      return res.status(201).json(entry);
+      const payload = await decorateProduct(entry);
+      return res.status(201).json(payload);
     }
 
     client = await pool.connect();
@@ -743,27 +934,15 @@ app.post('/api/magazines/:magazineId/products', authMiddleware, magazineAccessMi
         product.b ?? null,
         product.c ?? null,
         createdAt,
-        product.mainImageId || null,
+        mainImageId,
       ]
     );
 
     await persistImages(client, id, product.images);
     await client.query('COMMIT');
 
-    const { rows } = await pool.query(
-      `SELECT p.*, EXTRACT(EPOCH FROM p.created_at) * 1000 AS "createdAt",
-        p.drop_tag AS drop,
-        COALESCE((
-          SELECT json_agg(json_build_object('id', i.id, 'url', i.url, 'position', i.position) ORDER BY i.position)
-          FROM product_images i
-          WHERE i.product_id = p.id
-        ), '[]') AS images
-      FROM products p
-      WHERE p.id = $1`,
-      [id]
-    );
-
-    res.status(201).json(mapProductRow(rows[0]));
+    const savedProduct = await fetchProductById(id, req.magazine.id);
+    res.status(201).json(savedProduct);
   } catch (error) {
     if (client) await client.query('ROLLBACK');
     res.status(500).json({ message: 'Nie udało się utworzyć produktu' });
@@ -775,6 +954,7 @@ app.post('/api/magazines/:magazineId/products', authMiddleware, magazineAccessMi
 app.put('/api/magazines/:magazineId/products/:id', authMiddleware, magazineAccessMiddleware, async (req, res) => {
   const product = req.body || {};
   const { id } = req.params;
+  const mainImageId = product.mainImageId || product.images?.[0]?.id || null;
 
   let client;
   try {
@@ -788,11 +968,13 @@ app.put('/api/magazines/:magazineId/products/:id', authMiddleware, magazineAcces
         ...product,
         id,
         createdAt: product.createdAt ?? products[index].createdAt ?? Date.now(),
+        mainImageId,
       });
       products[index] = merged;
       memoryDb.products[req.magazine.id] = products;
       persistMemoryDb();
-      return res.json(merged);
+      const payload = await decorateProduct(merged);
+      return res.json(payload);
     }
 
     client = await pool.connect();
@@ -825,7 +1007,7 @@ app.put('/api/magazines/:magazineId/products/:id', authMiddleware, magazineAcces
         product.b ?? null,
         product.c ?? null,
         product.createdAt ? new Date(product.createdAt) : null,
-        product.mainImageId || null,
+        mainImageId,
         id,
         req.magazine.id,
       ]
@@ -839,20 +1021,8 @@ app.put('/api/magazines/:magazineId/products/:id', authMiddleware, magazineAcces
     await persistImages(client, id, product.images);
     await client.query('COMMIT');
 
-    const { rows } = await pool.query(
-      `SELECT p.*, EXTRACT(EPOCH FROM p.created_at) * 1000 AS "createdAt",
-        p.drop_tag AS drop,
-        COALESCE((
-          SELECT json_agg(json_build_object('id', i.id, 'url', i.url, 'position', i.position) ORDER BY i.position)
-          FROM product_images i
-          WHERE i.product_id = p.id
-        ), '[]') AS images
-      FROM products p
-      WHERE p.id = $1`,
-      [id]
-    );
-
-    res.json(mapProductRow(rows[0]));
+    const saved = await fetchProductById(id, req.magazine.id);
+    res.json(saved);
   } catch (error) {
     if (client) await client.query('ROLLBACK');
     res.status(500).json({ message: 'Nie udało się zaktualizować produktu' });
