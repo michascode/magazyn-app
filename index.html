@@ -10,7 +10,86 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 </head>
 <body>
+  <div id="authScreen" class="auth-screen hidden">
+    <div class="auth-card">
+      <div id="accountStep" class="auth-step">
+        <h1>MagazynApp</h1>
+        <p class="auth-subtitle">Utwórz konto, a potem wybierz lub załóż magazyn chroniony hasłem.</p>
+
+        <form id="loginForm" class="auth-form">
+          <label for="loginUsername">Nick konta</label>
+          <input id="loginUsername" name="username" required />
+          <label for="loginPassword">Hasło</label>
+          <input id="loginPassword" name="password" type="password" required />
+          <button type="submit" class="primary">Zaloguj</button>
+        </form>
+
+        <form id="registerForm" class="auth-form hidden">
+          <label for="registerUsername">Nick konta</label>
+          <input id="registerUsername" name="username" required />
+          <label for="registerPassword">Hasło</label>
+          <input id="registerPassword" name="password" type="password" required />
+          <button type="submit" class="primary">Załóż konto</button>
+        </form>
+
+        <button id="toggleForm" class="link">Nie masz konta? Załóż je</button>
+      </div>
+
+      <div id="magazineStep" class="auth-step hidden">
+        <div class="auth-header">
+          <div>
+            <p class="label">Zalogowano jako</p>
+            <strong id="accountName">-</strong>
+          </div>
+          <button id="logoutAccount" class="ghost">Wyloguj</button>
+        </div>
+
+        <p class="auth-subtitle">Wybierz istniejący magazyn lub utwórz nowy. Każdy magazyn ma własne hasło.</p>
+
+        <div class="magazine-list" id="magazineList"></div>
+
+        <form id="createMagazineForm" class="auth-form inline">
+          <div>
+            <label for="magazineName">Nazwa magazynu</label>
+            <input id="magazineName" name="name" required />
+          </div>
+          <div>
+            <label for="magazinePassword">Hasło magazynu</label>
+            <input id="magazinePassword" name="password" type="password" required />
+          </div>
+          <button type="submit" class="primary">Utwórz magazyn</button>
+        </form>
+
+        <form id="joinMagazineForm" class="auth-form inline">
+          <div>
+            <label for="joinName">Dołącz do magazynu</label>
+            <input id="joinName" name="name" required />
+          </div>
+          <div>
+            <label for="joinPassword">Hasło magazynu</label>
+            <input id="joinPassword" name="password" type="password" required />
+          </div>
+          <button type="submit" class="ghost">Połącz się</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
   <div class="app-shell">
+    <div class="app-bar">
+      <div class="identity">
+        <span class="dot"></span>
+        <div>
+          <p class="label">Połączono z magazynem</p>
+          <strong id="activeWarehouse">-</strong>
+          <p class="muted" id="activeAccount"></p>
+        </div>
+      </div>
+      <div class="app-actions">
+        <button id="switchMagazine" class="ghost">Zmień magazyn</button>
+        <button id="logoutBtn" class="ghost">Wyloguj</button>
+      </div>
+    </div>
     <header class="filters">
       <div class="filter text">
         <label>Wyszukaj…</label>
