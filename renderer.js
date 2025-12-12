@@ -103,6 +103,9 @@ function setAuthLoading(state, message = 'Przetwarzanie…', controller = null) 
     }, REQUEST_TIMEOUT_MS + 2000);
   } else {
     authActiveController = null;
+    formElements.forEach((el) => {
+      el.disabled = false;
+    });
   }
 }
 
