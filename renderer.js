@@ -65,64 +65,42 @@ let auth = {
   magazine: null,
 };
 let authLoading = false;
-let authLoadingReset = null;
-let authActiveController = null;
+let currentAuthController = null;
 
-function unlockAuthUi({ abortRequest = false } = {}) {
-  if (abortRequest && authActiveController) {
-    authActiveController.abort();
-  }
-  authActiveController = null;
-
-  if (authLoadingReset) {
-    clearTimeout(authLoadingReset);
-    authLoadingReset = null;
-  }
-
-  authLoading = false;
-  authOverlay.classList.add('hidden');
-  authOverlayText.textContent = '';
-  authCancelBtn.classList.add('hidden');
-  const formElements = authScreen.querySelectorAll('input, button');
-  formElements.forEach((el) => {
-    el.disabled = false;
-  });
-}
-
-function setAuthLoading(state, message = 'Przetwarzanie…', controller = null) {
-  if (!state) {
-    unlockAuthUi({ abortRequest: false });
-    return;
-  }
-
+function setAuthLoading(state, message = 'Przetwarzanie...') {
   authLoading = state;
   authOverlay.classList.toggle('hidden', !state);
-  authOverlayText.textContent = message;
-  const showCancel = state && Boolean(controller);
-  authCancelBtn.classList.toggle('hidden', !showCancel);
-  authCancelBtn.disabled = !showCancel;
+  authOverlayText.textContent = state ? message : '';
+
   const formElements = authScreen.querySelectorAll('input, button');
   formElements.forEach((el) => {
+    if (el.id === 'authCancel') return;
     el.disabled = state;
   });
 
-  if (authLoadingReset) {
-    clearTimeout(authLoadingReset);
-    authLoadingReset = null;
-  }
-
-  authActiveController = controller || null;
-  authLoadingReset = setTimeout(() => {
-    if (!authLoading) return;
-    unlockAuthUi({ abortRequest: true });
-    authOverlayText.textContent = 'Spróbuj ponownie';
-  }, REQUEST_TIMEOUT_MS + 2000);
+  authCancelBtn.classList.toggle('hidden', !state);
+  authCancelBtn.disabled = !state;
 }
 
-function startAuthAction(message) {
+function cancelAuthUi() {
+  if (currentAuthController) {
+    currentAuthController.abort();
+    currentAuthController = null;
+  }
+  setAuthLoading(false);
+}
+
+async function withAuthLoading(message, action) {
+  if (authLoading) return;
   const controller = new AbortController();
-  setAuthLoading(true, message, controller);
-  return controller;
+  currentAuthController = controller;
+  setAuthLoading(true, message);
+  try {
+    return await action(controller);
+  } finally {
+    currentAuthController = null;
+    setAuthLoading(false);
+  }
 }
 
 function persistAuth(data) {
@@ -161,7 +139,7 @@ async function apiRequest(path, options = {}, { controller = null } = {}) {
     return response.json();
   } catch (error) {
     if (error.name === 'AbortError') {
-      throw new Error('Operacja przerwana (brak odpowiedzi lub anulowano).');
+      throw new Error('Serwer nie odpowiada. Spróbuj ponownie.');
     }
     throw error;
   } finally {
@@ -774,20 +752,19 @@ async function handleLogin(event) {
   const username = loginForm.username.value;
   const password = loginForm.password.value;
   try {
-    const controller = startAuthAction('Logowanie...');
-    const result = await apiRequest('/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password }),
-    }, { controller });
-    auth = { token: result.token, user: result.user, magazine: null };
-    persistAuth(auth);
-    await fetchMagazines();
-    render();
+    await withAuthLoading('Logowanie...', async (controller) => {
+      const result = await apiRequest('/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      }, { controller });
+      auth = { token: result.token, user: result.user, magazine: null };
+      persistAuth(auth);
+      await fetchMagazines();
+      render();
+    });
   } catch (error) {
     alert(error.message);
-  } finally {
-    setAuthLoading(false);
   }
 }
 
@@ -797,20 +774,19 @@ async function handleRegister(event) {
   const username = registerForm.username.value;
   const password = registerForm.password.value;
   try {
-    const controller = startAuthAction('Zakładanie konta...');
-    const result = await apiRequest('/auth/register', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password }),
-    }, { controller });
-    auth = { token: result.token, user: result.user, magazine: null };
-    persistAuth(auth);
-    await fetchMagazines();
-    render();
+    await withAuthLoading('Zakładanie konta...', async (controller) => {
+      const result = await apiRequest('/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      }, { controller });
+      auth = { token: result.token, user: result.user, magazine: null };
+      persistAuth(auth);
+      await fetchMagazines();
+      render();
+    });
   } catch (error) {
     alert(error.message);
-  } finally {
-    setAuthLoading(false);
   }
 }
 
@@ -820,28 +796,27 @@ async function handleCreateMagazine(event) {
   const name = createMagazineForm.name.value;
   const password = createMagazineForm.password.value;
   try {
-    const controller = startAuthAction('Tworzenie magazynu...');
-    const mag = await apiRequest('/magazines', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, password }),
-    }, { controller });
-    magazines.push(mag);
-    auth.magazine = mag;
-    persistAuth(auth);
-    await loadProducts();
-    if (products.length === 0) {
-      const seed = generateSeedData();
-      for (const product of seed) {
-        await upsertProduct(product);
-      }
+    await withAuthLoading('Tworzenie magazynu...', async (controller) => {
+      const mag = await apiRequest('/magazines', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, password }),
+      }, { controller });
+      magazines.push(mag);
+      auth.magazine = mag;
+      persistAuth(auth);
       await loadProducts();
-    }
-    render();
+      if (products.length === 0) {
+        const seed = generateSeedData();
+        for (const product of seed) {
+          await upsertProduct(product);
+        }
+        await loadProducts();
+      }
+      render();
+    });
   } catch (error) {
     alert(error.message);
-  } finally {
-    setAuthLoading(false);
   }
 }
 
@@ -851,33 +826,32 @@ async function handleJoinMagazine(event) {
   const name = joinMagazineForm.name.value;
   const password = joinMagazineForm.password.value;
   try {
-    const controller = startAuthAction('Łączenie z magazynem...');
-    const mag = await apiRequest('/magazines/connect', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, password }),
-    }, { controller });
-    if (!magazines.some((m) => m.id === mag.id)) magazines.push(mag);
-    auth.magazine = mag;
-    persistAuth(auth);
-    await loadProducts();
-    if (products.length === 0) {
-      const seed = generateSeedData();
-      for (const product of seed) {
-        await upsertProduct(product);
-      }
+    await withAuthLoading('Łączenie z magazynem...', async (controller) => {
+      const mag = await apiRequest('/magazines/connect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, password }),
+      }, { controller });
+      if (!magazines.some((m) => m.id === mag.id)) magazines.push(mag);
+      auth.magazine = mag;
+      persistAuth(auth);
       await loadProducts();
-    }
-    render();
+      if (products.length === 0) {
+        const seed = generateSeedData();
+        for (const product of seed) {
+          await upsertProduct(product);
+        }
+        await loadProducts();
+      }
+      render();
+    });
   } catch (error) {
     alert(error.message);
-  } finally {
-    setAuthLoading(false);
   }
 }
 
 function toggleAuthForm() {
-  unlockAuthUi();
+  cancelAuthUi();
   const isLoginVisible = !loginForm.classList.contains('hidden');
   loginForm.classList.toggle('hidden', isLoginVisible);
   registerForm.classList.toggle('hidden', !isLoginVisible);
@@ -903,7 +877,7 @@ async function handleSwitchMagazine() {
 
 function render() {
   const ready = Boolean(auth.token && auth.magazine);
-  if (!ready) unlockAuthUi();
+  if (!ready) cancelAuthUi();
   updateShellVisibility();
   if (!auth.token) {
     accountStep.classList.remove('hidden');
@@ -1014,7 +988,7 @@ toggleFormBtn.addEventListener('click', (e) => {
 
 authCancelBtn.addEventListener('click', (e) => {
   e.preventDefault();
-  unlockAuthUi({ abortRequest: true });
+  cancelAuthUi();
 });
 
 restoreAuth();
