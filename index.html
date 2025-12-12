@@ -12,11 +12,6 @@
 <body>
   <div id="authScreen" class="auth-screen hidden">
     <div class="auth-card">
-      <div id="authOverlay" class="auth-overlay hidden">
-        <div class="loader"></div>
-        <p id="authOverlayText" class="muted">Ładowanie…</p>
-        <button id="authCancel" class="ghost small">Przerwij</button>
-      </div>
       <div id="accountStep" class="auth-step">
         <h1>MagazynApp</h1>
         <p class="auth-subtitle">Utwórz konto, a potem wybierz lub załóż magazyn chroniony hasłem.</p>
@@ -36,6 +31,8 @@
           <input id="registerPassword" name="password" type="password" required />
           <button type="submit" class="primary">Załóż konto</button>
         </form>
+
+        <p id="accountStatus" class="status muted"></p>
 
         <button id="toggleForm" class="link">Nie masz konta? Załóż je</button>
       </div>
@@ -76,6 +73,8 @@
           </div>
           <button type="submit" class="ghost">Połącz się</button>
         </form>
+
+        <p id="magazineStatus" class="status muted"></p>
       </div>
     </div>
   </div>

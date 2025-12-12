@@ -647,33 +647,9 @@ button.danger:hover {
   gap: 10px;
 }
 
-.auth-overlay {
-  position: absolute;
-  inset: 0;
-  background: rgba(255, 255, 255, 0.72);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  border-radius: 16px;
-  backdrop-filter: blur(6px);
-  z-index: 5;
-}
-
-.loader {
-  width: 34px;
-  height: 34px;
-  border-radius: 50%;
-  border: 4px solid #e5e7eb;
-  border-top-color: var(--primary);
-  animation: spin 0.9s linear infinite;
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
+.status {
+  min-height: 20px;
+  margin: 8px 0 0;
 }
 
 .magazine-item {

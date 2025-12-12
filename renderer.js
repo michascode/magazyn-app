@@ -29,9 +29,8 @@ const magazineListEl = document.getElementById('magazineList');
 const createMagazineForm = document.getElementById('createMagazineForm');
 const joinMagazineForm = document.getElementById('joinMagazineForm');
 const switchMagazineBtn = document.getElementById('switchMagazine');
-const authOverlay = document.getElementById('authOverlay');
-const authOverlayText = document.getElementById('authOverlayText');
-const authCancelBtn = document.getElementById('authCancel');
+const accountStatus = document.getElementById('accountStatus');
+const magazineStatus = document.getElementById('magazineStatus');
 
 const dropdowns = {
   brand: document.getElementById('brandDropdown'),
@@ -64,44 +63,6 @@ let auth = {
   user: null,
   magazine: null,
 };
-let authLoading = false;
-let currentAuthController = null;
-
-function setAuthLoading(state, message = 'Przetwarzanie...') {
-  authLoading = state;
-  authOverlay.classList.toggle('hidden', !state);
-  authOverlayText.textContent = state ? message : '';
-
-  const formElements = authScreen.querySelectorAll('input, button');
-  formElements.forEach((el) => {
-    if (el.id === 'authCancel') return;
-    el.disabled = state;
-  });
-
-  authCancelBtn.classList.toggle('hidden', !state);
-  authCancelBtn.disabled = !state;
-}
-
-function cancelAuthUi() {
-  if (currentAuthController) {
-    currentAuthController.abort();
-    currentAuthController = null;
-  }
-  setAuthLoading(false);
-}
-
-async function withAuthLoading(message, action) {
-  if (authLoading) return;
-  const controller = new AbortController();
-  currentAuthController = controller;
-  setAuthLoading(true, message);
-  try {
-    return await action(controller);
-  } finally {
-    currentAuthController = null;
-    setAuthLoading(false);
-  }
-}
 
 function persistAuth(data) {
   localStorage.setItem('magazyn-auth', JSON.stringify(data));
@@ -118,33 +79,57 @@ function restoreAuth() {
   }
 }
 
-const REQUEST_TIMEOUT_MS = 8000;
+function setFormBusy(form, statusEl, busy, message = '') {
+  const controls = form.querySelectorAll('input, button');
+  controls.forEach((el) => {
+    el.disabled = busy;
+  });
 
-async function apiRequest(path, options = {}, { controller = null } = {}) {
+  if (statusEl) {
+    statusEl.textContent = message;
+  }
+}
+
+function resetAuthStatus() {
+  accountStatus.textContent = '';
+  magazineStatus.textContent = '';
+  [loginForm, registerForm, createMagazineForm, joinMagazineForm].forEach((form) => {
+    const buttons = form.querySelectorAll('input, button');
+    buttons.forEach((el) => {
+      el.disabled = false;
+    });
+  });
+}
+
+async function runAuthAction(form, statusEl, workingMessage, action) {
+  setFormBusy(form, statusEl, true, workingMessage);
+  try {
+    const result = await action();
+    if (statusEl) statusEl.textContent = 'Gotowe';
+    return result;
+  } catch (error) {
+    const message = error.message || 'Operacja nie powiodła się';
+    if (statusEl) statusEl.textContent = message;
+    alert(message);
+    throw error;
+  } finally {
+    setFormBusy(form, statusEl, false, statusEl?.textContent || '');
+  }
+}
+
+async function apiRequest(path, options = {}) {
   const headers = options.headers ? { ...options.headers } : {};
   if (auth.token) {
     headers.Authorization = `Bearer ${auth.token}`;
   }
 
-  const ctrl = controller || new AbortController();
-  const timeout = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
-
-  try {
-    const response = await fetch(`${API_URL}${path}`, { ...options, headers, signal: ctrl.signal });
-    if (!response.ok) {
-      const message = await response.json().catch(() => ({ message: 'Błąd serwera' }));
-      throw new Error(message.message || 'Nie udało się wykonać żądania');
-    }
-    if (response.status === 204) return null;
-    return response.json();
-  } catch (error) {
-    if (error.name === 'AbortError') {
-      throw new Error('Serwer nie odpowiada. Spróbuj ponownie.');
-    }
-    throw error;
-  } finally {
-    clearTimeout(timeout);
+  const response = await fetch(`${API_URL}${path}`, { ...options, headers });
+  if (!response.ok) {
+    const message = await response.json().catch(() => ({ message: 'Błąd serwera' }));
+    throw new Error(message.message || 'Nie udało się wykonać żądania');
   }
+  if (response.status === 204) return null;
+  return response.json();
 }
 
 async function fetchMagazines() {
@@ -748,110 +733,94 @@ function updateShellVisibility() {
 
 async function handleLogin(event) {
   event.preventDefault();
-  if (authLoading) return;
   const username = loginForm.username.value;
   const password = loginForm.password.value;
-  try {
-    await withAuthLoading('Logowanie...', async (controller) => {
-      const result = await apiRequest('/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password }),
-      }, { controller });
-      auth = { token: result.token, user: result.user, magazine: null };
-      persistAuth(auth);
-      await fetchMagazines();
-      render();
+  accountStatus.textContent = '';
+  await runAuthAction(loginForm, accountStatus, 'Logowanie...', async () => {
+    const result = await apiRequest('/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
     });
-  } catch (error) {
-    alert(error.message);
-  }
+    auth = { token: result.token, user: result.user, magazine: null };
+    persistAuth(auth);
+    await fetchMagazines();
+    render();
+  });
 }
 
 async function handleRegister(event) {
   event.preventDefault();
-  if (authLoading) return;
   const username = registerForm.username.value;
   const password = registerForm.password.value;
-  try {
-    await withAuthLoading('Zakładanie konta...', async (controller) => {
-      const result = await apiRequest('/auth/register', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password }),
-      }, { controller });
-      auth = { token: result.token, user: result.user, magazine: null };
-      persistAuth(auth);
-      await fetchMagazines();
-      render();
+  accountStatus.textContent = '';
+  await runAuthAction(registerForm, accountStatus, 'Zakładanie konta...', async () => {
+    const result = await apiRequest('/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
     });
-  } catch (error) {
-    alert(error.message);
-  }
+    auth = { token: result.token, user: result.user, magazine: null };
+    persistAuth(auth);
+    await fetchMagazines();
+    render();
+  });
 }
 
 async function handleCreateMagazine(event) {
   event.preventDefault();
-  if (authLoading) return;
   const name = createMagazineForm.name.value;
   const password = createMagazineForm.password.value;
-  try {
-    await withAuthLoading('Tworzenie magazynu...', async (controller) => {
-      const mag = await apiRequest('/magazines', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, password }),
-      }, { controller });
-      magazines.push(mag);
-      auth.magazine = mag;
-      persistAuth(auth);
-      await loadProducts();
-      if (products.length === 0) {
-        const seed = generateSeedData();
-        for (const product of seed) {
-          await upsertProduct(product);
-        }
-        await loadProducts();
-      }
-      render();
+  magazineStatus.textContent = '';
+  await runAuthAction(createMagazineForm, magazineStatus, 'Tworzenie magazynu...', async () => {
+    const mag = await apiRequest('/magazines', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, password }),
     });
-  } catch (error) {
-    alert(error.message);
-  }
+    magazines.push(mag);
+    auth.magazine = mag;
+    persistAuth(auth);
+    await loadProducts();
+    if (products.length === 0) {
+      const seed = generateSeedData();
+      for (const product of seed) {
+        await upsertProduct(product);
+      }
+      await loadProducts();
+    }
+    render();
+  });
 }
 
 async function handleJoinMagazine(event) {
   event.preventDefault();
-  if (authLoading) return;
   const name = joinMagazineForm.name.value;
   const password = joinMagazineForm.password.value;
-  try {
-    await withAuthLoading('Łączenie z magazynem...', async (controller) => {
-      const mag = await apiRequest('/magazines/connect', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, password }),
-      }, { controller });
-      if (!magazines.some((m) => m.id === mag.id)) magazines.push(mag);
-      auth.magazine = mag;
-      persistAuth(auth);
-      await loadProducts();
-      if (products.length === 0) {
-        const seed = generateSeedData();
-        for (const product of seed) {
-          await upsertProduct(product);
-        }
-        await loadProducts();
-      }
-      render();
+  magazineStatus.textContent = '';
+  await runAuthAction(joinMagazineForm, magazineStatus, 'Łączenie z magazynem...', async () => {
+    const mag = await apiRequest('/magazines/connect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, password }),
     });
-  } catch (error) {
-    alert(error.message);
-  }
+    if (!magazines.some((m) => m.id === mag.id)) magazines.push(mag);
+    auth.magazine = mag;
+    persistAuth(auth);
+    await loadProducts();
+    if (products.length === 0) {
+      const seed = generateSeedData();
+      for (const product of seed) {
+        await upsertProduct(product);
+      }
+      await loadProducts();
+    }
+    render();
+  });
 }
 
 function toggleAuthForm() {
-  cancelAuthUi();
+  resetAuthStatus();
   const isLoginVisible = !loginForm.classList.contains('hidden');
   loginForm.classList.toggle('hidden', isLoginVisible);
   registerForm.classList.toggle('hidden', !isLoginVisible);
@@ -863,6 +832,7 @@ function handleLogout() {
   products = [];
   selectedProductId = null;
   persistAuth(auth);
+  resetAuthStatus();
   render();
 }
 
@@ -871,15 +841,16 @@ async function handleSwitchMagazine() {
   products = [];
   selectedProductId = null;
   persistAuth(auth);
+  resetAuthStatus();
   await fetchMagazines();
   render();
 }
 
 function render() {
   const ready = Boolean(auth.token && auth.magazine);
-  if (!ready) cancelAuthUi();
   updateShellVisibility();
   if (!auth.token) {
+    resetAuthStatus();
     accountStep.classList.remove('hidden');
     magazineStep.classList.add('hidden');
     return;
@@ -984,11 +955,6 @@ switchMagazineBtn.addEventListener('click', handleSwitchMagazine);
 toggleFormBtn.addEventListener('click', (e) => {
   e.preventDefault();
   toggleAuthForm();
-});
-
-authCancelBtn.addEventListener('click', (e) => {
-  e.preventDefault();
-  cancelAuthUi();
 });
 
 restoreAuth();
