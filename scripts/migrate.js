@@ -83,6 +83,7 @@ async function ensureSchema() {
       a INTEGER,
       b INTEGER,
       c INTEGER,
+      main_image_id UUID,
       created_at TIMESTAMPTZ DEFAULT now()
     );`,
     `CREATE TABLE IF NOT EXISTS product_images (
@@ -146,9 +147,9 @@ async function seedMemberships() {
 
 async function seedProducts() {
   const insertProduct = `INSERT INTO products (
-      id, warehouse_id, name, brand, size, condition, drop_tag, price, code, a, b, c, created_at
+      id, warehouse_id, name, brand, size, condition, drop_tag, price, code, a, b, c, created_at, main_image_id
     ) VALUES (
-      $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13
+      $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
     ) ON CONFLICT (id) DO UPDATE SET
       warehouse_id = EXCLUDED.warehouse_id,
       name = EXCLUDED.name,
@@ -161,7 +162,8 @@ async function seedProducts() {
       a = EXCLUDED.a,
       b = EXCLUDED.b,
       c = EXCLUDED.c,
-      created_at = EXCLUDED.created_at;`;
+      created_at = EXCLUDED.created_at,
+      main_image_id = EXCLUDED.main_image_id;`;
 
   const insertImage = `INSERT INTO product_images (id, product_id, url, position)
     VALUES ($1, $2, $3, $4)
@@ -184,6 +186,7 @@ async function seedProducts() {
         product.b ?? null,
         product.c ?? null,
         toTimestamp(product.createdAt),
+        product.mainImageId || null,
       ]);
 
       for (const [index, image] of (product.images || []).entries()) {

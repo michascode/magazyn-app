@@ -1,241 +1,584 @@
 require('dotenv').config();
 const express = require('express');
-const fs = require('fs');
-const path = require('path');
-const { v4: uuid } = require('uuid');
-const crypto = require('crypto');
 const cors = require('cors');
+const { Pool } = require('pg');
+const { v4: uuid } = require('uuid');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
 
 const PORT = process.env.PORT || 4000;
 const JWT_SECRET = process.env.JWT_SECRET || 'development-secret';
+const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '1d';
 const DATABASE_URL = process.env.DATABASE_URL;
+const DATABASE_SSL = (process.env.DATABASE_SSL || '').toLowerCase() === 'true' ||
+  (DATABASE_URL || '').includes('supabase.co');
 
 if (!DATABASE_URL) {
-  console.warn('DATABASE_URL nie ustawiony - API korzysta z pliku server/data/db.json.');
+  console.error('DATABASE_URL nie jest ustawiony. Uzupełnij konfigurację bazy danych.');
+  process.exit(1);
 }
 
 if (!process.env.JWT_SECRET) {
   console.warn('JWT_SECRET nie ustawiony - używany jest klucz deweloperski.');
 }
-const DATA_PATH = path.join(__dirname, 'data', 'db.json');
+
+const pool = new Pool({
+  connectionString: DATABASE_URL,
+  ssl: DATABASE_SSL ? { rejectUnauthorized: false } : undefined,
+});
 
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 
-const DEFAULT_DB = { users: [], magazines: [], memberships: {}, products: {} };
+function buildQueryFilters(query, startingIndex = 1) {
+  const conditions = [];
+  const values = [];
+  let index = startingIndex;
 
-function ensureDb() {
-  if (!fs.existsSync(DATA_PATH)) {
-    fs.mkdirSync(path.dirname(DATA_PATH), { recursive: true });
-    fs.writeFileSync(DATA_PATH, JSON.stringify(DEFAULT_DB, null, 2));
+  const addArrayFilter = (field, value) => {
+    const items = (value || '')
+      .split(',')
+      .map((v) => v.trim())
+      .filter(Boolean);
+    if (items.length) {
+      conditions.push(`${field} = ANY($${index})`);
+      values.push(items);
+      index += 1;
+    }
+  };
+
+  if (query.search) {
+    conditions.push(`LOWER(p.name) LIKE $${index}`);
+    values.push(`%${query.search.toLowerCase()}%`);
+    index += 1;
+  }
+
+  if (query.code) {
+    conditions.push(`LOWER(p.code) LIKE $${index}`);
+    values.push(`%${query.code.toLowerCase()}%`);
+    index += 1;
+  }
+
+  addArrayFilter('p.brand', query.brand);
+  addArrayFilter('p.size', query.size);
+  addArrayFilter('p.condition', query.condition);
+  addArrayFilter('p.drop_tag', query.drop);
+
+  return { conditions, values, index };
+}
+
+function mapOrderBy(sort) {
+  switch (sort) {
+    case 'cena-rosnaco':
+      return 'p.price ASC NULLS LAST';
+    case 'cena-malejaco':
+      return 'p.price DESC NULLS LAST';
+    case 'az':
+      return 'p.name ASC';
+    case 'za':
+      return 'p.name DESC';
+    case 'najstarsze':
+      return 'p.created_at ASC';
+    case 'najnowsze':
+    default:
+      return 'p.created_at DESC';
   }
 }
 
-function loadDb() {
-  ensureDb();
-  try {
-    return JSON.parse(fs.readFileSync(DATA_PATH, 'utf-8'));
-  } catch (error) {
-    return { ...DEFAULT_DB };
+function mapProductRow(row) {
+  const images = Array.isArray(row.images) ? row.images : [];
+  const mainImageId = row.mainImageId || images[0]?.id || null;
+
+  return {
+    id: row.id,
+    warehouseId: row.warehouse_id,
+    name: row.name,
+    brand: row.brand,
+    size: row.size,
+    condition: row.condition,
+    drop: row.drop,
+    price: row.price !== null ? Number(row.price) : null,
+    code: row.code,
+    a: row.a !== null ? Number(row.a) : null,
+    b: row.b !== null ? Number(row.b) : null,
+    c: row.c !== null ? Number(row.c) : null,
+    createdAt: Number(row.createdAt),
+    images,
+    mainImageId,
+  };
+}
+
+async function fetchAvailableFilters(magazineId) {
+  const { rows } = await pool.query(
+    `SELECT
+      array_remove(array_agg(DISTINCT brand), NULL) AS brand,
+      array_remove(array_agg(DISTINCT size), NULL) AS size,
+      array_remove(array_agg(DISTINCT condition), NULL) AS condition,
+      array_remove(array_agg(DISTINCT drop_tag), NULL) AS drop
+    FROM products
+    WHERE warehouse_id = $1;`,
+    [magazineId]
+  );
+
+  const filters = rows[0] || {};
+  return {
+    brand: filters.brand || [],
+    size: filters.size || [],
+    condition: filters.condition || [],
+    drop: filters.drop || [],
+  };
+}
+
+async function verifyPassword(password, hash) {
+  if (hash && hash.startsWith('$2')) {
+    return bcrypt.compare(password, hash);
   }
+
+  const legacy = crypto.createHash('sha256').update(password).digest('hex');
+  return legacy === hash;
 }
 
-function saveDb(db) {
-  fs.writeFileSync(DATA_PATH, JSON.stringify(db, null, 2));
+async function upgradeUserPasswordHash(userId, password, currentHash) {
+  if (currentHash && currentHash.startsWith('$2')) return;
+  const newHash = await bcrypt.hash(password, 10);
+  await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [newHash, userId]);
 }
 
-function hashPassword(password) {
-  return crypto.createHash('sha256').update(password).digest('hex');
+async function upgradeWarehousePasswordHash(warehouseId, password, currentHash) {
+  if (currentHash && currentHash.startsWith('$2')) return;
+  const newHash = await bcrypt.hash(password, 10);
+  await pool.query('UPDATE warehouses SET password_hash = $1 WHERE id = $2', [newHash, warehouseId]);
 }
 
 function createToken(userId) {
-  const payload = `${userId}:${Date.now()}`;
-  const signature = crypto.createHmac('sha256', JWT_SECRET).update(payload).digest('hex');
-  return Buffer.from(`${payload}:${signature}`).toString('base64');
+  return jwt.sign({ sub: userId }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
 }
 
-function decodeToken(token) {
-  const decoded = Buffer.from(token, 'base64').toString('utf-8');
-  const [userId, issuedAt, signature] = decoded.split(':');
-  if (!userId || !issuedAt || !signature) throw new Error('Niepełny token');
-  const expected = crypto
-    .createHmac('sha256', JWT_SECRET)
-    .update(`${userId}:${issuedAt}`)
-    .digest('hex');
-  if (expected !== signature) throw new Error('Błędny podpis tokenu');
-  return { userId, issuedAt: Number(issuedAt) };
-}
+async function authMiddleware(req, res, next) {
+  const header = req.headers.authorization || '';
+  if (!header.startsWith('Bearer ')) {
+    return res.status(401).json({ message: 'Brak tokenu Bearer' });
+  }
+  const token = header.slice(7);
 
-function authMiddleware(req, res, next) {
-  const header = req.headers.authorization;
-  if (!header) return res.status(401).json({ message: 'Brak nagłówka autoryzacji' });
-  const token = header.replace('Bearer ', '');
   try {
-    const { userId } = decodeToken(token);
-    const db = loadDb();
-    const user = db.users.find((u) => u.id === userId);
-    if (!user) return res.status(401).json({ message: 'Niepoprawny token' });
-    req.user = user;
-    req.db = db;
+    const payload = jwt.verify(token, JWT_SECRET);
+    const { rows } = await pool.query('SELECT id, login FROM users WHERE id = $1', [payload.sub]);
+    const user = rows[0];
+    if (!user) {
+      return res.status(401).json({ message: 'Niepoprawny token' });
+    }
+    req.user = { id: user.id, username: user.login };
     next();
   } catch (error) {
+    if (error.name === 'TokenExpiredError') {
+      return res.status(401).json({ message: 'Token wygasł' });
+    }
     res.status(401).json({ message: 'Nie można zweryfikować tokenu' });
   }
 }
 
-function ensureMembership(db, userId) {
-  if (!db.memberships[userId]) db.memberships[userId] = [];
-  return db.memberships[userId];
-}
-
-function magazineAccessMiddleware(req, res, next) {
+async function magazineAccessMiddleware(req, res, next) {
   const { magazineId } = req.params;
-  const memberships = ensureMembership(req.db, req.user.id);
-  if (!memberships.includes(magazineId)) {
-    return res.status(403).json({ message: 'Brak dostępu do magazynu' });
+  try {
+    const { rows } = await pool.query(
+      `SELECT w.id, w.name, w.owner_id
+       FROM warehouses w
+       INNER JOIN warehouse_memberships wm ON wm.warehouse_id = w.id
+       WHERE wm.user_id = $1 AND w.id = $2`,
+      [req.user.id, magazineId]
+    );
+
+    const magazine = rows[0];
+    if (!magazine) {
+      return res.status(403).json({ message: 'Brak dostępu do magazynu' });
+    }
+
+    req.magazine = { id: magazine.id, name: magazine.name, ownerId: magazine.owner_id };
+    next();
+  } catch (error) {
+    res.status(500).json({ message: 'Nie udało się zweryfikować dostępu' });
   }
-  req.magazineId = magazineId;
-  next();
 }
 
-app.post('/api/auth/register', (req, res) => {
+app.post('/api/auth/register', async (req, res) => {
   const { username, password } = req.body;
   if (!username || !password) {
     return res.status(400).json({ message: 'Wymagany nick i hasło do konta' });
   }
-  const db = loadDb();
-  if (db.users.some((u) => u.username.toLowerCase() === username.toLowerCase())) {
-    return res.status(409).json({ message: 'Użytkownik o takim nicku już istnieje' });
+
+  try {
+    const existing = await pool.query('SELECT 1 FROM users WHERE LOWER(login) = LOWER($1)', [username]);
+    if (existing.rowCount > 0) {
+      return res.status(409).json({ message: 'Użytkownik o takim nicku już istnieje' });
+    }
+
+    const id = uuid();
+    const passwordHash = await bcrypt.hash(password, 10);
+    await pool.query('INSERT INTO users (id, login, password_hash) VALUES ($1, $2, $3)', [
+      id,
+      username,
+      passwordHash,
+    ]);
+
+    const token = createToken(id);
+    res.status(201).json({ token, user: { id, username } });
+  } catch (error) {
+    res.status(500).json({ message: 'Nie udało się utworzyć konta' });
   }
-  const user = { id: uuid(), username, password: hashPassword(password) };
-  db.users.push(user);
-  saveDb(db);
-  const token = createToken(user.id);
-  res.json({ token, user: { id: user.id, username: user.username } });
 });
 
-app.post('/api/auth/login', (req, res) => {
+app.post('/api/auth/login', async (req, res) => {
   const { username, password } = req.body;
   if (!username || !password) {
     return res.status(400).json({ message: 'Wymagany nick i hasło do konta' });
   }
-  const db = loadDb();
-  const user = db.users.find((u) => u.username.toLowerCase() === username.toLowerCase());
-  if (!user || user.password !== hashPassword(password)) {
-    return res.status(401).json({ message: 'Niepoprawny nick lub hasło' });
+
+  try {
+    const { rows } = await pool.query('SELECT id, login, password_hash FROM users WHERE LOWER(login) = LOWER($1)', [
+      username,
+    ]);
+    const user = rows[0];
+    if (!user) {
+      return res.status(401).json({ message: 'Niepoprawny nick lub hasło' });
+    }
+
+    const valid = await verifyPassword(password, user.password_hash);
+    if (!valid) {
+      return res.status(401).json({ message: 'Niepoprawny nick lub hasło' });
+    }
+
+    await upgradeUserPasswordHash(user.id, password, user.password_hash);
+
+    const token = createToken(user.id);
+    res.json({ token, user: { id: user.id, username: user.login } });
+  } catch (error) {
+    res.status(500).json({ message: 'Nie udało się zalogować' });
   }
-  const token = createToken(user.id);
-  res.json({ token, user: { id: user.id, username: user.username } });
 });
 
-app.get('/api/magazines', authMiddleware, (req, res) => {
-  const { db, user } = req;
-  const memberships = ensureMembership(db, user.id);
-  const items = memberships
-    .map((id) => db.magazines.find((m) => m.id === id))
-    .filter(Boolean)
-    .map(({ id, name, ownerId }) => ({ id, name, ownerId }));
-  res.json(items);
+app.get('/api/magazines', authMiddleware, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT w.id, w.name, w.owner_id
+       FROM warehouses w
+       INNER JOIN warehouse_memberships wm ON wm.warehouse_id = w.id
+       WHERE wm.user_id = $1
+       ORDER BY w.name`,
+      [req.user.id]
+    );
+    res.json(rows.map((row) => ({ id: row.id, name: row.name, ownerId: row.owner_id })));
+  } catch (error) {
+    res.status(500).json({ message: 'Nie udało się pobrać magazynów' });
+  }
 });
 
-app.post('/api/magazines', authMiddleware, (req, res) => {
+app.post('/api/magazines', authMiddleware, async (req, res) => {
   const { name, password } = req.body;
   if (!name || !password) {
     return res.status(400).json({ message: 'Wymagany nick i hasło magazynu' });
   }
-  const db = req.db;
-  const exists = db.magazines.some((m) => m.name.toLowerCase() === name.toLowerCase());
-  if (exists) {
-    return res.status(409).json({ message: 'Magazyn o takim nicku już istnieje' });
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const passwordHash = await bcrypt.hash(password, 10);
+    const id = uuid();
+
+    await client.query(
+      'INSERT INTO warehouses (id, name, password_hash, owner_id) VALUES ($1, $2, $3, $4)',
+      [id, name, passwordHash, req.user.id]
+    );
+    await client.query(
+      'INSERT INTO warehouse_memberships (user_id, warehouse_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+      [req.user.id, id]
+    );
+
+    await client.query('COMMIT');
+    res.status(201).json({ id, name, ownerId: req.user.id });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    if (error.code === '23505') {
+      return res.status(409).json({ message: 'Magazyn o takim nicku już istnieje' });
+    }
+    res.status(500).json({ message: 'Nie udało się utworzyć magazynu' });
+  } finally {
+    client.release();
   }
-  const magazine = { id: uuid(), name, password: hashPassword(password), ownerId: req.user.id };
-  db.magazines.push(magazine);
-  ensureMembership(db, req.user.id).push(magazine.id);
-  db.products[magazine.id] = [];
-  saveDb(db);
-  res.status(201).json({ id: magazine.id, name: magazine.name, ownerId: magazine.ownerId });
 });
 
-app.post('/api/magazines/connect', authMiddleware, (req, res) => {
+app.post('/api/magazines/connect', authMiddleware, async (req, res) => {
   const { name, password } = req.body;
   if (!name || !password) {
     return res.status(400).json({ message: 'Wymagany nick i hasło magazynu' });
   }
-  const db = req.db;
-  const magazine = db.magazines.find((m) => m.name.toLowerCase() === name.toLowerCase());
-  if (!magazine || magazine.password !== hashPassword(password)) {
-    return res.status(401).json({ message: 'Niepoprawna nazwa magazynu lub hasło' });
+
+  try {
+    const { rows } = await pool.query('SELECT * FROM warehouses WHERE LOWER(name) = LOWER($1)', [name]);
+    const magazine = rows[0];
+    if (!magazine) {
+      return res.status(401).json({ message: 'Niepoprawna nazwa magazynu lub hasło' });
+    }
+
+    const valid = await verifyPassword(password, magazine.password_hash);
+    if (!valid) {
+      return res.status(401).json({ message: 'Niepoprawna nazwa magazynu lub hasło' });
+    }
+
+    await upgradeWarehousePasswordHash(magazine.id, password, magazine.password_hash);
+
+    await pool.query(
+      'INSERT INTO warehouse_memberships (user_id, warehouse_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+      [req.user.id, magazine.id]
+    );
+
+    res.json({ id: magazine.id, name: magazine.name, ownerId: magazine.owner_id });
+  } catch (error) {
+    res.status(500).json({ message: 'Nie udało się połączyć z magazynem' });
   }
-  const memberships = ensureMembership(db, req.user.id);
-  if (!memberships.includes(magazine.id)) memberships.push(magazine.id);
-  saveDb(db);
-  res.json({ id: magazine.id, name: magazine.name, ownerId: magazine.ownerId });
 });
 
-app.delete('/api/magazines/:magazineId', authMiddleware, magazineAccessMiddleware, (req, res) => {
-  const { db, user, magazineId } = req;
-  const magazine = db.magazines.find((m) => m.id === magazineId);
-  if (!magazine) return res.status(404).json({ message: 'Magazyn nie istnieje' });
+app.delete('/api/magazines/:magazineId', authMiddleware, magazineAccessMiddleware, async (req, res) => {
+  const { magazineId } = req.params;
+  try {
+    const { rows } = await pool.query('SELECT owner_id FROM warehouses WHERE id = $1', [magazineId]);
+    const magazine = rows[0];
+    if (!magazine) return res.status(404).json({ message: 'Magazyn nie istnieje' });
 
-  if (magazine.ownerId === user.id) {
-    db.magazines = db.magazines.filter((m) => m.id !== magazineId);
-    delete db.products[magazineId];
-    Object.keys(db.memberships).forEach((userId) => {
-      db.memberships[userId] = (db.memberships[userId] || []).filter((id) => id !== magazineId);
-      if (db.memberships[userId].length === 0) delete db.memberships[userId];
+    if (magazine.owner_id === req.user.id) {
+      await pool.query('DELETE FROM warehouses WHERE id = $1', [magazineId]);
+      return res.json({ removed: true, scope: 'deleted' });
+    }
+
+    await pool.query('DELETE FROM warehouse_memberships WHERE user_id = $1 AND warehouse_id = $2', [
+      req.user.id,
+      magazineId,
+    ]);
+    res.json({ removed: true, scope: 'left' });
+  } catch (error) {
+    res.status(500).json({ message: 'Nie udało się usunąć magazynu' });
+  }
+});
+
+app.get('/api/magazines/:magazineId/products', authMiddleware, magazineAccessMiddleware, async (req, res) => {
+  const page = Math.max(1, Number(req.query.page) || 1);
+  const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize) || 20));
+  const offset = (page - 1) * pageSize;
+
+  try {
+    const filters = buildQueryFilters(req.query, 2);
+    const baseConditions = ['p.warehouse_id = $1', ...filters.conditions];
+    const whereClause = baseConditions.length ? `WHERE ${baseConditions.join(' AND ')}` : '';
+    const params = [req.magazine.id, ...filters.values];
+    const orderBy = mapOrderBy(req.query.sort);
+
+    const totalQuery = `SELECT COUNT(*) FROM products p ${whereClause}`;
+    const totalResult = await pool.query(totalQuery, params);
+    const total = Number(totalResult.rows[0].count) || 0;
+
+    const itemsQuery = `
+      SELECT
+        p.id,
+        p.warehouse_id,
+        p.name,
+        p.brand,
+        p.size,
+        p.condition,
+        p.drop_tag AS drop,
+        p.price,
+        p.code,
+        p.a,
+        p.b,
+        p.c,
+        p.main_image_id AS "mainImageId",
+        EXTRACT(EPOCH FROM p.created_at) * 1000 AS "createdAt",
+        COALESCE(
+          (
+            SELECT json_agg(json_build_object('id', i.id, 'url', i.url, 'position', i.position) ORDER BY i.position)
+            FROM product_images i
+            WHERE i.product_id = p.id
+          ),
+          '[]'
+        ) AS images
+      FROM products p
+      ${whereClause}
+      ORDER BY ${orderBy}
+      LIMIT $${params.length + 1} OFFSET $${params.length + 2};
+    `;
+
+    const { rows } = await pool.query(itemsQuery, [...params, pageSize, offset]);
+    const filtersData = await fetchAvailableFilters(req.magazine.id);
+
+    res.json({
+      items: rows.map(mapProductRow),
+      total,
+      page,
+      pageSize,
+      filters: filtersData,
     });
-    saveDb(db);
-    return res.json({ removed: true, scope: 'deleted' });
+  } catch (error) {
+    res.status(500).json({ message: 'Nie udało się pobrać produktów' });
   }
-
-  db.memberships[user.id] = (db.memberships[user.id] || []).filter((id) => id !== magazineId);
-  saveDb(db);
-  res.json({ removed: true, scope: 'left' });
 });
 
-app.get('/api/magazines/:magazineId/products', authMiddleware, magazineAccessMiddleware, (req, res) => {
-  const items = req.db.products[req.magazineId] || [];
-  res.json(items);
-});
+async function persistImages(client, productId, images = []) {
+  await client.query('DELETE FROM product_images WHERE product_id = $1', [productId]);
 
-app.post('/api/magazines/:magazineId/products', authMiddleware, magazineAccessMiddleware, (req, res) => {
-  const product = { ...req.body, id: uuid(), createdAt: Date.now() };
-  const items = req.db.products[req.magazineId] || [];
-  items.unshift(product);
-  req.db.products[req.magazineId] = items;
-  saveDb(req.db);
-  res.status(201).json(product);
-});
-
-app.put('/api/magazines/:magazineId/products/:id', authMiddleware, magazineAccessMiddleware, (req, res) => {
-  const items = req.db.products[req.magazineId] || [];
-  const index = items.findIndex((p) => p.id === req.params.id);
-  const updated = { ...req.body, id: req.params.id };
-
-  if (index === -1) {
-    updated.createdAt = updated.createdAt || Date.now();
-    items.unshift(updated);
-  } else {
-    items[index] = { ...items[index], ...updated };
+  for (const [index, image] of images.entries()) {
+    const imageId = image.id || uuid();
+    await client.query(
+      'INSERT INTO product_images (id, product_id, url, position) VALUES ($1, $2, $3, $4)',
+      [imageId, productId, image.url, index]
+    );
   }
+}
 
-  req.db.products[req.magazineId] = items;
-  saveDb(req.db);
-  res.json(updated);
+app.post('/api/magazines/:magazineId/products', authMiddleware, magazineAccessMiddleware, async (req, res) => {
+  const product = req.body || {};
+  const id = product.id || uuid();
+  const createdAt = product.createdAt ? new Date(product.createdAt) : new Date();
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+    await client.query(
+      `INSERT INTO products (
+        id, warehouse_id, name, brand, size, condition, drop_tag, price, code, a, b, c, created_at, main_image_id
+      ) VALUES (
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
+      )`,
+      [
+        id,
+        req.magazine.id,
+        product.name,
+        product.brand || null,
+        product.size || null,
+        product.condition || null,
+        product.drop || null,
+        product.price ?? null,
+        product.code || null,
+        product.a ?? null,
+        product.b ?? null,
+        product.c ?? null,
+        createdAt,
+        product.mainImageId || null,
+      ]
+    );
+
+    await persistImages(client, id, product.images);
+    await client.query('COMMIT');
+
+    const { rows } = await pool.query(
+      `SELECT p.*, EXTRACT(EPOCH FROM p.created_at) * 1000 AS "createdAt",
+        p.drop_tag AS drop,
+        COALESCE((
+          SELECT json_agg(json_build_object('id', i.id, 'url', i.url, 'position', i.position) ORDER BY i.position)
+          FROM product_images i
+          WHERE i.product_id = p.id
+        ), '[]') AS images
+      FROM products p
+      WHERE p.id = $1`,
+      [id]
+    );
+
+    res.status(201).json(mapProductRow(rows[0]));
+  } catch (error) {
+    await client.query('ROLLBACK');
+    res.status(500).json({ message: 'Nie udało się utworzyć produktu' });
+  } finally {
+    client.release();
+  }
 });
 
-app.delete('/api/magazines/:magazineId/products/:id', authMiddleware, magazineAccessMiddleware, (req, res) => {
-  const items = req.db.products[req.magazineId] || [];
-  const index = items.findIndex((p) => p.id === req.params.id);
-  if (index === -1) return res.status(404).json({ message: 'Produkt nie istnieje' });
-  items.splice(index, 1);
-  req.db.products[req.magazineId] = items;
-  saveDb(req.db);
-  res.status(204).end();
+app.put('/api/magazines/:magazineId/products/:id', authMiddleware, magazineAccessMiddleware, async (req, res) => {
+  const product = req.body || {};
+  const { id } = req.params;
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+    const result = await client.query(
+      `UPDATE products SET
+        name = $1,
+        brand = $2,
+        size = $3,
+        condition = $4,
+        drop_tag = $5,
+        price = $6,
+        code = $7,
+        a = $8,
+        b = $9,
+        c = $10,
+        created_at = COALESCE($11, created_at),
+        main_image_id = $12
+      WHERE id = $13 AND warehouse_id = $14
+      RETURNING *`,
+      [
+        product.name,
+        product.brand || null,
+        product.size || null,
+        product.condition || null,
+        product.drop || null,
+        product.price ?? null,
+        product.code || null,
+        product.a ?? null,
+        product.b ?? null,
+        product.c ?? null,
+        product.createdAt ? new Date(product.createdAt) : null,
+        product.mainImageId || null,
+        id,
+        req.magazine.id,
+      ]
+    );
+
+    if (result.rowCount === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ message: 'Produkt nie istnieje' });
+    }
+
+    await persistImages(client, id, product.images);
+    await client.query('COMMIT');
+
+    const { rows } = await pool.query(
+      `SELECT p.*, EXTRACT(EPOCH FROM p.created_at) * 1000 AS "createdAt",
+        p.drop_tag AS drop,
+        COALESCE((
+          SELECT json_agg(json_build_object('id', i.id, 'url', i.url, 'position', i.position) ORDER BY i.position)
+          FROM product_images i
+          WHERE i.product_id = p.id
+        ), '[]') AS images
+      FROM products p
+      WHERE p.id = $1`,
+      [id]
+    );
+
+    res.json(mapProductRow(rows[0]));
+  } catch (error) {
+    await client.query('ROLLBACK');
+    res.status(500).json({ message: 'Nie udało się zaktualizować produktu' });
+  } finally {
+    client.release();
+  }
+});
+
+app.delete('/api/magazines/:magazineId/products/:id', authMiddleware, magazineAccessMiddleware, async (req, res) => {
+  const { id } = req.params;
+  try {
+    const result = await pool.query('DELETE FROM products WHERE id = $1 AND warehouse_id = $2', [
+      id,
+      req.magazine.id,
+    ]);
+    if (result.rowCount === 0) {
+      return res.status(404).json({ message: 'Produkt nie istnieje' });
+    }
+    res.status(204).end();
+  } catch (error) {
+    res.status(500).json({ message: 'Nie udało się usunąć produktu' });
+  }
 });
 
 app.listen(PORT, () => {
-  ensureDb();
   console.log(`API startuje na porcie ${PORT}`);
 });
