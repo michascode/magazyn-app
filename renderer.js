@@ -64,6 +64,7 @@ let auth = {
   magazine: null,
 };
 let authLoading = false;
+let authLoadingReset = null;
 
 function setAuthLoading(state, message = 'Przetwarzanie…') {
   authLoading = state;
@@ -73,6 +74,22 @@ function setAuthLoading(state, message = 'Przetwarzanie…') {
   formElements.forEach((el) => {
     el.disabled = state;
   });
+
+  if (authLoadingReset) {
+    clearTimeout(authLoadingReset);
+    authLoadingReset = null;
+  }
+
+  if (state) {
+    authLoadingReset = setTimeout(() => {
+      authLoading = false;
+      authOverlay.classList.add('hidden');
+      authOverlayText.textContent = 'Spróbuj ponownie';
+      formElements.forEach((el) => {
+        el.disabled = false;
+      });
+    }, REQUEST_TIMEOUT_MS + 2000);
+  }
 }
 
 function persistAuth(data) {
