@@ -9,13 +9,26 @@
     "build": "echo 'Brak etapu build dla API — assets Electron budowane lokalnie'",
     "package": "electron-builder -w",
     "api": "node server/server.js",
-    "migrate": "node scripts/migrate.js"
+    "migrate": "node scripts/migrate.js",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --check .",
+    "format:fix": "prettier --write .",
+    "test": "NODE_ENV=test jest --runInBand",
+    "prepare": "husky install"
   },
   "author": "",
   "license": "MIT",
   "devDependencies": {
     "electron": "^29.4.0",
-    "electron-builder": "^24.13.3"
+    "electron-builder": "^24.13.3",
+    "eslint": "^9.6.0",
+    "eslint-config-prettier": "^9.1.0",
+    "husky": "^9.1.4",
+    "jest": "^29.7.0",
+    "lint-staged": "^15.2.7",
+    "prettier": "^3.3.3",
+    "supertest": "^6.4.2"
   },
   "build": {
     "appId": "com.magazyn.app",
@@ -36,5 +49,9 @@
     "jsonwebtoken": "^9.0.2",
     "mime-types": "^2.1.35",
     "multer": "^1.4.5-lts.1"
+  },
+  "lint-staged": {
+    "*.js": ["eslint --fix", "prettier --write"],
+    "*.{json,md}": ["prettier --write"]
   }
 }
