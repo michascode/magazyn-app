@@ -9,6 +9,23 @@ Desktopowa aplikacja magazynowa wspierająca ręczne wystawianie i zarządzanie 
 - Node.js 18+
 - npm
 
+## Szybki start (Supabase Frankfurt)
+1. Utwórz bazę PostgreSQL (np. projekt Supabase w regionie **Frankfurt/eu-central-1**) i skopiuj swój connection string `DATABASE_URL`.
+2. Skopiuj plik `.env.example` do `.env` i uzupełnij zmienne środowiskowe:
+   - `DATABASE_URL` – pełny connection string do bazy,
+   - `JWT_SECRET` – klucz do podpisywania tokenów,
+   - opcjonalnie `DATABASE_SSL=true` (Supabase wymaga połączeń SSL), `PORT` oraz `NODE_ENV`.
+3. Zainstaluj zależności i przygotuj tabele wraz z danymi startowymi z `server/data/db.json`:
+   ```bash
+   npm install
+   npm run migrate
+   ```
+4. Uruchom backend/API:
+   ```bash
+   npm run api   # lub npm start, jeśli chcesz równocześnie otworzyć aplikację Electron
+   ```
+   Serwer Express ładuje zmienne z `.env` na starcie; jeżeli `DATABASE_URL` nie jest ustawiony, pracuje na lokalnym pliku JSON.
+
 ## Klonowanie repozytorium (przykład PowerShell)
 ```powershell
 cd $env:USERPROFILE\Desktop
@@ -26,6 +43,8 @@ cd magazyn-app
 ```
 
 ## Uruchomienie w trybie deweloperskim
+Domyślnie backend korzysta z pliku `server/data/db.json`, ale po uzupełnieniu `.env` może być spięty z bazą PostgreSQL (np. Supabase).
+
 ```
 npm install
 npm run api   # startuje prosty serwer HTTP na porcie 4000 z persystencją w server/data/db.json
@@ -33,17 +52,19 @@ npm start
 ```
 
 ## Konfiguracja bazy PostgreSQL (np. Supabase EU/Frankfurt)
-1. Utwórz projekt w wybranym dostawcy (np. Supabase w regionie eu-central-1) i zanotuj adres połączenia `DATABASE_URL` do bazy PostgreSQL.
-2. Skopiuj plik `.env.example` do `.env` i uzupełnij zmienne:
-   - `DATABASE_URL` – pełny connection string do bazy,
-   - `JWT_SECRET` – własny sekretny klucz do podpisywania tokenów,
-   - opcjonalnie `DATABASE_SSL=true` dla Supabase oraz `PORT` jeśli chcesz zmienić port API.
-3. Uruchom jednorazowo migracje SQL oraz import danych z pliku `server/data/db.json`:
+Skrypt `npm run migrate` tworzy schemat tabel: `users` (login, password_hash, role), `warehouses`, `warehouse_memberships`, `products`, `product_images`, `sessions` i zasila je danymi z `server/data/db.json`.
+
+1. Przygotuj connection string do bazy (Supabase udostępnia go w ustawieniach projektu, region Frankfurt/eu-central-1).
+2. Skopiuj `.env.example` do `.env`, uzupełnij `DATABASE_URL`, `JWT_SECRET` oraz ewentualnie `DATABASE_SSL`, `PORT`, `NODE_ENV`.
+3. Uruchom migracje i import danych:
    ```bash
    npm run migrate
    ```
-   Skrypt tworzy tabele: `users` (login, password_hash, role), `warehouses`, `warehouse_memberships`, `products`, `product_images`, `sessions`, a następnie zasiewa dane z pliku JSON.
-4. Po migracji możesz podłączyć backend do bazy (wartość `DATABASE_URL` jest wczytywana przez serwer Express) albo nadal korzystać z pliku JSON w trybie offline.
+4. Wystartuj serwer Express (API) – zmienne zostaną wczytane przez `dotenv` przed konfiguracją serwera:
+   ```bash
+   npm run api
+   ```
+   Jeśli chcesz od razu otworzyć aplikację Electron, użyj w osobnym terminalu `npm start`.
 
 > Jeśli uruchamiasz serwer API w osobnym oknie PowerShell, wejdź najpierw do katalogu repozytorium. Przykład dla standardowej
 > lokalizacji na Pulpicie: `cd C:\Users\TwojeKonto\Desktop\magazyn-app`, a następnie `npm run api`.
