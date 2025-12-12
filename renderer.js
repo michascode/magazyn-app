@@ -88,7 +88,7 @@ function restoreAuth() {
 }
 
 function setFormBusy(form, statusEl, busy, message = '') {
-  const controls = Array.from(form.querySelectorAll('input, button, select, textarea'));
+  const controls = Array.from(form.querySelectorAll('button[type="submit"], button.primary'));
   controls.forEach((el) => {
     el.disabled = busy;
     if (busy) el.setAttribute('aria-disabled', 'true');
@@ -101,6 +101,13 @@ function setFormBusy(form, statusEl, busy, message = '') {
 }
 
 function enableAuthInputs() {
+  authScreen.querySelectorAll('input, button, select, textarea').forEach((el) => {
+    el.disabled = false;
+    el.removeAttribute('aria-disabled');
+  });
+}
+
+function unlockAllAuthControls() {
   authScreen.querySelectorAll('input, button, select, textarea').forEach((el) => {
     el.disabled = false;
     el.removeAttribute('aria-disabled');
@@ -149,14 +156,12 @@ function resetAppToInitialState() {
   magazineStatus.textContent = '';
   authScreen.classList.remove('hidden');
   appShell.style.display = 'none';
+  unlockAllAuthControls();
   forceUnlockAuthUi(loginForm);
 }
 
 function forceUnlockAuthUi(formToFocus) {
-  authScreen.querySelectorAll('input, button, select, textarea').forEach((el) => {
-    el.disabled = false;
-    el.removeAttribute('aria-disabled');
-  });
+  unlockAllAuthControls();
 
   if (formToFocus) {
     const firstInput = formToFocus.querySelector('input:not([type="hidden"]):not([disabled])');
@@ -178,6 +183,7 @@ async function runAuthAction(form, statusEl, workingMessage, action) {
     return null;
   } finally {
     setFormBusy(form, statusEl, false, statusEl?.textContent || '');
+    unlockAllAuthControls();
     forceUnlockAuthUi(form);
   }
 }
