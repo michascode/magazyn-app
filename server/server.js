@@ -1068,6 +1068,10 @@ app.get('/healthz', async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`API startuje na porcie ${PORT}`);
-});
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`API startuje na porcie ${PORT}`);
+  });
+}
+
+module.exports = { app, pool, useMemoryStore };
