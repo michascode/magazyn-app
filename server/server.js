@@ -13,6 +13,11 @@ const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '1d';
 const DATABASE_URL = process.env.DATABASE_URL;
 const DATABASE_SSL = (process.env.DATABASE_SSL || '').toLowerCase() === 'true' ||
   (DATABASE_URL || '').includes('supabase.co');
+const CORS_ORIGINS = (process.env.CORS_ORIGINS || '')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+const ALLOW_ALL_ORIGINS = CORS_ORIGINS.length === 0 || CORS_ORIGINS.includes('*');
 
 if (!DATABASE_URL) {
   console.error('DATABASE_URL nie jest ustawiony. Uzupełnij konfigurację bazy danych.');
@@ -28,8 +33,18 @@ const pool = new Pool({
   ssl: DATABASE_SSL ? { rejectUnauthorized: false } : undefined,
 });
 
+const corsOptions = {
+  origin(origin, callback) {
+    if (!origin || ALLOW_ALL_ORIGINS || CORS_ORIGINS.includes(origin)) {
+      return callback(null, true);
+    }
+    return callback(null, false);
+  },
+  optionsSuccessStatus: 200,
+};
+
 const app = express();
-app.use(cors());
+app.use(cors(corsOptions));
 app.use(express.json({ limit: '50mb' }));
 
 function buildQueryFilters(query, startingIndex = 1) {
@@ -576,6 +591,16 @@ app.delete('/api/magazines/:magazineId/products/:id', authMiddleware, magazineAc
     res.status(204).end();
   } catch (error) {
     res.status(500).json({ message: 'Nie udało się usunąć produktu' });
+  }
+});
+
+app.get('/healthz', async (req, res) => {
+  try {
+    await pool.query('SELECT 1');
+    res.json({ status: 'ok' });
+  } catch (error) {
+    console.error('Healthcheck failed', error);
+    res.status(503).json({ status: 'error', message: 'Database unavailable' });
   }
 });
 
